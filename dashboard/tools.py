@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 import shutil
 from urllib.parse import urlsplit
+from .http_identity import browser_user_agent
 
 ROOT = Path(__file__).resolve().parent.parent
 CATALOG = {
@@ -154,4 +155,9 @@ def command(engagement, payload, tools):
         args = [exe, "-u", url.rstrip("/") + "/FUZZ", "-w", wordlist, "-rate", rate, "-t", "1", "-maxtime", str(duration), "-timeout", "10", "-json", "-noninteractive"]
     else:
         args = [exe, "-u", url, "-t", str(ROOT / "dashboard" / "templates" / "server-header.yaml"), *common, "-j", "-nc", "-dr", "-ni", "-nh", "-no-stdin", "-rl", rate, "-c", "1", "-bs", "1", "-timeout", "10", "-retries", "0"]
+    user_agent = browser_user_agent()
+    if tool in ("httpx", "katana", "nuclei", "ffuf"):
+        args += ["-H", "User-Agent: " + user_agent]
+    elif tool == "feroxbuster":
+        args += ["--user-agent", user_agent]
     return args

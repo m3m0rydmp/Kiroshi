@@ -2,7 +2,8 @@
 
 > **WSL dashboard extension:** This branch also includes a local web engagement
 > console with scope settings, WSL tool discovery/execution, cached recon,
-> anonymous/session runs, live logs, findings, and Claude Code/Codex handoffs.
+> anonymous/session runs, live logs, evidence-readiness reviews, public report
+> references, and Claude Code/Codex handoffs.
 > Run `./hunt-dashboard`, then open `http://localhost:8741`.
 > See [DASHBOARD.md](DASHBOARD.md) for setup, capabilities and current limits.
 

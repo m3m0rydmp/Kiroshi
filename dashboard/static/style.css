@@ -1141,6 +1141,93 @@ progress.bar::-moz-progress-bar {
   background: linear-gradient(90deg, #a1e7ef, #d2b5fb, #ffb8aa);
   border-radius: 4px;
 }
+.review-section {
+  margin: 22px 0;
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+.review-section summary {
+  cursor: pointer;
+  color: #d9c3ef;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+.review-result {
+  background: #121320;
+  padding: 16px;
+  border: 1px solid #49405c;
+  border-radius: 7px;
+  font-size: 11px;
+}
+.review-checks {
+  padding: 0;
+  margin: 18px 0;
+  list-style: none;
+}
+.review-checks li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid #292438;
+}
+.review-checks li > span {
+  font-size: 15px;
+}
+.review-checks small {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  margin-top: 3px;
+}
+.check-pass > span {
+  color: #a5e5df;
+}
+.check-gap > span {
+  color: #ffb5aa;
+}
+.pill.ready_for_human_review {
+  background: #233d3e;
+  color: #a5ebe0;
+}
+.pill.needs_evidence {
+  background: #3b2c51;
+  color: #dfc5ff;
+}
+.pill.likely_informational {
+  background: #2d3150;
+  color: #b9ccff;
+}
+.pill.likely_excluded_or_expected {
+  background: #4b3431;
+  color: #ffd2ab;
+}
+.reference-card h3 {
+  font-family: inherit;
+  line-height: 1.6;
+}
+.reference-card .row h3 {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+}
+.reference-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
+}
+.review-section p {
+  margin-bottom: 12px;
+}
+.review-section .help {
+  display: block;
+}
+#reference-result {
+  font-size: 12px;
+  color: var(--accent);
+  margin-top: 14px;
+}
 
 main,
 .content,

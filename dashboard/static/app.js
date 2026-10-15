@@ -6,6 +6,8 @@ let state = {
   tools: [],
   sessions: [],
   assets: [],
+  references: [],
+  review_fields: {},
 };
 let view = "overview",
   selected = "",
@@ -175,7 +177,7 @@ function engagementView() {
       "Anonymous and authenticated work share the same persistent cache.",
       `<div class="row"><button class="btn" data-action="edit-engagement" data-id="${e.id}">Edit scope</button><button class="btn primary" data-action="run" data-id="${e.id}">＋ New run</button></div>`,
     ) +
-    `<div class="grid-two"><div>${panel("Scope & operating limits", `<div class="panel-body stack"><div><label>IN SCOPE</label><code>${e.scope.map(esc).join("<br>")}</code></div><div><label>EXCLUDED</label><code>${e.excluded.map(esc).join("<br>") || "None specified"}</code></div><div><label>PROGRAM POLICY</label><span class="path text-muted">${esc(e.policy) || "Not provided"}</span></div><div class="row"><span class="pill">${e.rate} requests / second</span><span class="pill">${e.duration} second job limit</span><span class="pill">${esc(e.provider)}</span></div></div>`)}${panel("Cached discoveries", assetTable(state.assets.filter((a) => a.engagement_id === e.id).slice(0, 10)), `<button class="btn small" data-view="assets">All assets →</button>`)}${panel("Run history", jobTable(state.jobs.filter((j) => j.engagement_id === e.id).slice(0, 8)))}</div><div>${panel("Session credentials", `<div class="panel-body"><div class="note neutral">Start anonymously. Add cookies or headers here whenever you need an authenticated pass.</div>${sessions.length ? sessions.map((s) => `<div class="session-card"><div class="row spread"><h3>${esc(s.label)}</h3><span class="pill ready">Saved</span></div><p class="path">${esc(s.origin)}</p><code>${s.header_names.map(esc).join(", ")} · values hidden</code><div class="row"><button class="btn small" data-action="replace-session" data-id="${s.id}">Replace</button><button class="btn small danger" data-action="delete-session" data-id="${s.id}">Delete</button></div></div>`).join("") : "<p>No sessions saved. Anonymous runs are ready.</p>"}<div class="form-actions"><button class="btn" data-action="session" data-id="${e.id}">＋ Add session</button></div></div>`)}${panel("Continue with an agent", `<div class="panel-body"><p>Your friend's hunt brief is generated in this engagement workspace. Claude Code and Codex use shared instructions and handoff notes.</p><div class="form-actions"><button class="btn" data-view="agent">Open handoff ↗</button></div></div>`)}</div></div>`
+    `<div class="grid-two"><div>${panel("Scope & operating limits", `<div class="panel-body stack"><div><label>IN SCOPE</label><code>${e.scope.map(esc).join("<br>")}</code></div><div><label>EXCLUDED</label><code>${e.excluded.map(esc).join("<br>") || "None specified"}</code></div><div><label>PROGRAM POLICY</label><span class="path text-muted">${esc(e.policy) || "Not provided"}</span></div><div class="row"><span class="pill">${e.rate} requests / second</span><span class="pill">${e.duration} second job limit</span><span class="pill">${esc(e.provider)}</span></div></div>`)}${panel("Cached discoveries", assetTable(state.assets.filter((a) => a.engagement_id === e.id).slice(0, 10)), `<button class="btn small" data-view="assets">All assets →</button>`)}${panel("Run history", jobTable(state.jobs.filter((j) => j.engagement_id === e.id).slice(0, 8)))}</div><div>${panel("Session credentials", `<div class="panel-body"><div class="note neutral">Start anonymously. Add cookies or headers here whenever you need an authenticated pass.</div>${sessions.length ? sessions.map((s) => `<div class="session-card"><div class="row spread"><h3>${esc(s.label)}</h3><span class="pill ready">Saved</span></div><p class="path">${esc(s.origin)}</p><code>${s.header_names.map(esc).join(", ")} · values hidden</code><div class="row"><button class="btn small" data-action="replace-session" data-id="${s.id}">Replace</button><button class="btn small danger" data-action="delete-session" data-id="${s.id}">Delete</button></div></div>`).join("") : "<p>No sessions saved. Anonymous runs are ready.</p>"}<div class="form-actions"><button class="btn" data-action="session" data-id="${e.id}">＋ Add session</button></div></div>`)}${panel("Continue with an agent", `<div class="panel-body"><p>The hunt script generates a brief in this engagement workspace. Claude Code and Codex use shared instructions and handoff notes.</p><div class="form-actions"><button class="btn" data-view="agent">Open handoff ↗</button></div></div>`)}</div></div>`
   );
 }
 function assetTable(rows) {
@@ -217,7 +219,7 @@ function findingsView() {
   return (
     heading(
       "Findings",
-      "Keep observations separate from validated vulnerabilities.",
+      "Evidence review before confirmation. Public references inform comparison, never eligibility.",
       state.engagements.length
         ? '<button class="btn primary" data-action="finding">＋ Add finding</button>'
         : "",
@@ -226,7 +228,7 @@ function findingsView() {
     panel(
       "Review queue",
       rows.length
-        ? `<div class="table-wrap"><table><thead><tr><th>Finding</th><th>Severity</th><th>Status</th><th>Engagement</th><th></th></tr></thead><tbody>${rows.map((f) => `<tr><td><strong>${esc(f.title)}</strong><div class="sub path">${esc(f.target)}</div></td><td>${pill(f.severity)}</td><td>${pill(f.status)}</td><td>${esc(engagementName(f.engagement_id))}</td><td><button class="btn small" data-action="edit-finding" data-id="${f.id}">Review →</button></td></tr>`).join("")}</tbody></table></div>`
+        ? `<div class="table-wrap"><table><thead><tr><th>Finding</th><th>Severity</th><th>Status</th><th>Readiness</th><th></th></tr></thead><tbody>${rows.map((f) => `<tr><td><strong>${esc(f.title)}</strong><div class="sub path">${esc(f.target)} · ${esc(engagementName(f.engagement_id))}</div></td><td>${pill(f.severity)}</td><td>${pill(f.status)}</td><td>${pill(f.readiness?.disposition || "needs_evidence")}<div class="sub">${f.readiness?.completed || 0} / ${f.readiness?.total || 18} checks</div></td><td><button class="btn small" data-action="edit-finding" data-id="${f.id}">Review →</button></td></tr>`).join("")}</tbody></table></div>`
         : empty(
             "No findings recorded",
             "Scanner matches begin unverified. Add reproducible evidence before confirming impact.",
@@ -234,13 +236,84 @@ function findingsView() {
     )
   );
 }
+function referenceCards(rows) {
+  if (!rows.length)
+    return empty(
+      "No matching public reports",
+      "Import publicly disclosed HackerOne report URLs. Current target eligibility must be checked separately.",
+    );
+  return rows
+    .map(
+      (r) =>
+        `<article class="tool-card reference-card"><div class="row spread"><h3>#${esc(r.report_id)} · ${esc(r.program)}</h3>${pill(r.outcome)}</div><h3>${esc(r.title)}</h3><p>${esc(r.weakness || "Weakness not specified")} · ${esc(r.severity)}</p><div class="reference-meta">${r.rewarded === true ? `<span class="pill ready">Reward visible: ${esc(r.bounty_amount)} ${esc(r.currency)}</span>` : `<span class="pill">${r.rewarded === false ? "No positive reward shown" : "Reward unknown"}</span>`}<span class="help">Disclosed ${esc(r.disclosed_at?.slice(0, 10))}</span></div><footer><span>Public metadata · ${when(r.fetched_at)}</span><button class="btn small" data-action="reference-detail" data-id="${esc(r.id)}">Read reference ↗</button></footer></article>`,
+    )
+    .join("");
+}
+function referencesView() {
+  return (
+    heading(
+      "Public report library",
+      "Historical outcomes and evidence patterns, with source links and disclosure dates.",
+      '<button class="btn primary" data-action="import-references">＋ Import public reports</button>',
+    ) +
+    '<div class="note neutral">A reward in another report does not establish eligibility or severity here. Disclosures can be outdated or incomplete. Private reports and attachments are not collected.</div>' +
+    `<div class="toolbar"><input id="reference-search" aria-label="Search public reports" placeholder="Search title, program, weakness or outcome…"><select id="reference-filter" aria-label="Filter public reports"><option value="all">All outcomes</option><option value="rewarded">Visible reward</option><option value="valid">Triaged / resolved</option><option value="informative">Informative / not applicable</option></select><button class="btn" data-action="discover-references">Search HackerOne API ↗</button></div><div class="tool-grid" id="reference-grid">${referenceCards(state.references || [])}</div>`
+  );
+}
+function filterReferences() {
+  const query = $("#reference-search").value.toLowerCase(),
+    filter = $("#reference-filter").value;
+  $("#reference-grid").innerHTML = referenceCards(
+    (state.references || []).filter(
+      (r) =>
+        [r.title, r.program, r.weakness, r.outcome]
+          .join(" ")
+          .toLowerCase()
+          .includes(query) &&
+        (filter === "all" ||
+          (filter === "rewarded" && r.rewarded === true) ||
+          (filter === "valid" && ["triaged", "resolved"].includes(r.outcome)) ||
+          (filter === "informative" &&
+            ["informative", "not-applicable", "not_applicable"].includes(
+              r.outcome,
+            ))),
+    ),
+  );
+}
+function importReferenceModal() {
+  modal(
+    "Import public reports",
+    "Paste up to five HackerOne report URLs or numeric IDs. Imports are cached locally and rate-limited.",
+    `<form id="reference-import-form"><label>Public report URLs / IDs</label><textarea name="urls" rows="5" placeholder="https://hackerone.com/reports/123456"></textarea><label class="check-label"><input type="checkbox" name="refresh">Refresh previously cached metadata</label><p class="help">Anonymous fetch only. No saved engagement credentials are sent. Only explicitly public, disclosed reports are retained.</p><div class="inline-error" id="form-error"></div><div id="reference-result" role="status"></div><div class="form-actions"><button class="btn primary">Import references</button></div></form>`,
+  );
+}
+function discoverReferenceModal() {
+  modal(
+    "Search public HackerOne reports",
+    "Uses the documented Hacktivity API; only explicitly disclosed results are shown.",
+    `<form id="reference-discover-form"><label>Lucene query (optional)</label><input name="query" placeholder="team:gitlab AND total_awarded_amount:>0"><label>Page (10 results)</label><input name="page" type="number" min="1" max="100" value="1"><div class="note neutral">${state.reference_search_enabled ? "HackerOne API credentials are configured in the server environment." : "Set HUNT_H1_API_USERNAME and HUNT_H1_API_TOKEN in your WSL environment, then restart the dashboard. Public URL imports work without API credentials."}</div><div class="inline-error" id="form-error"></div><div class="form-actions"><button class="btn primary" ${state.reference_search_enabled ? "" : "disabled"}>Search disclosed reports</button></div></form><div id="discovery-results"></div>`,
+  );
+}
+function referenceDetail(id) {
+  const r = state.references.find((r) => r.id === id);
+  modal(
+    `Public report #${esc(r.report_id)}`,
+    "Untrusted reference content. Historical outcome does not establish eligibility for your finding.",
+    `<div class="stack"><h3>${esc(r.title)}</h3><div class="row">${pill(r.outcome)}<span class="pill">${esc(r.program)}</span><span class="pill">${r.rewarded === true ? "Visible reward" : "Reward not established"}</span></div><p>${esc(r.eligibility)}</p><label>Short public excerpt</label><pre class="terminal">${esc(r.excerpt || "No description was visible in the public response.")}</pre><div><a href="${esc(r.source_url)}" target="_blank" rel="noopener noreferrer">Open original disclosure ↗</a></div><p class="help">Disclosed: ${esc(r.disclosed_at)} · Retrieved: ${esc(r.fetched_at)} · Source fingerprint: ${esc(r.source_hash.slice(0, 16))}</p></div>`,
+  );
+}
+function readinessSummary(readiness) {
+  if (!readiness)
+    return '<div class="note neutral">Complete the evidence review, then check readiness. Drafts can be saved with gaps.</div>';
+  return `<div class="review-result"><div class="row spread">${pill(readiness.disposition)}<span>${readiness.completed} / ${readiness.total} complete</span></div><ul class="review-checks">${readiness.checks.map((c) => `<li class="${c.passed ? "check-pass" : "check-gap"}"><span>${c.passed ? "✓" : "○"}</span><div>${esc(c.label)}<small>${esc(c.reason)}</small></div></li>`).join("")}</ul><p class="help">${esc(readiness.notice)}</p></div>`;
+}
 function toolsView() {
   return (
     heading(
       "Your WSL toolchain",
       `${state.tools.length} catalog entries. ${state.tools.filter((t) => t.installed && t.adapter).length} installed tools have runnable adapters.`,
     ) +
-    `<div class="note neutral">Ready adapters can be launched from an engagement. Inventory-only entries are detected but require an adapter before this dashboard can run them. No tools are installed automatically.</div><div class="toolbar"><input id="tool-search" placeholder="Search tools or categories…" aria-label="Search toolchain"><select id="tool-filter" aria-label="Tool availability"><option value="all">All tools</option><option value="ready">Ready to run</option><option value="installed">Installed</option><option value="missing">Missing</option></select></div><div class="tool-grid" id="tool-grid">${toolCards(state.tools)}</div>`
+    `<div class="note neutral"><strong>HTTP User-Agent</strong><br><code class="path">${esc(state.http_user_agent || "Restart the dashboard to load HTTP identity")}</code><p class="help">Used by the HTTP adapters and reference collector. Subfinder manages its own browser identity; DNS/TLS have no User-Agent.</p></div><div class="note neutral">Ready adapters can be launched from an engagement. Inventory-only entries are detected but require an adapter before this dashboard can run them. No tools are installed automatically.</div><div class="toolbar"><input id="tool-search" placeholder="Search tools or categories…" aria-label="Search toolchain"><select id="tool-filter" aria-label="Tool availability"><option value="all">All tools</option><option value="ready">Ready to run</option><option value="installed">Installed</option><option value="missing">Missing</option></select></div><div class="tool-grid" id="tool-grid">${toolCards(state.tools)}</div>`
   );
 }
 function toolCards(rows) {
@@ -264,7 +337,7 @@ function agentView() {
           "Workspace",
           empty(
             "Create an engagement first",
-            "Agent workspaces are generated from your friend’s original hunt script.",
+            "Agent workspaces are generated from the hunt script.",
           ),
         )
       : `<div class="toolbar">${engagementFilter()}</div><div class="note neutral">Agent execution stays in your terminal. This page prepares the workspace and launch command; it does not run an unattended AI agent. Your existing Claude Code provider configuration applies.</div><div class="grid-two"><div>${panel("Shared handoff", `<div class="panel-body"><label for="handoff-text">Current position, evidence references, pending cleanup and next action</label><textarea id="handoff-text" rows="15" placeholder="Loading…"></textarea><div class="form-actions"><button class="btn primary" data-action="save-handoff" data-id="${e.id}">Save handoff</button></div></div>`)}</div><div>${panel("Launch locally", `<div class="panel-body stack"><div><label>ENGAGEMENT</label><strong>${esc(e.name)}</strong></div><div><label>TERMINAL COMMAND</label><pre id="agent-command" class="terminal">Loading…</pre></div><button class="btn" data-action="copy-agent">Copy command</button><p class="help">Stop the current agent before launching another. Sessions saved in this dashboard are not automatically injected into an external agent process.</p><div><label>WORKSPACE</label><code id="agent-path" class="path"></code></div></div>`)}</div></div>`)
@@ -277,6 +350,7 @@ function render() {
     assets: "Asset cache",
     jobs: "Jobs & logs",
     findings: "Findings",
+    references: "Public reports",
     tools: "Toolchain",
     agent: "Agent handoff",
   };
@@ -290,6 +364,7 @@ function render() {
     assets: assetsView,
     jobs: jobsView,
     findings: findingsView,
+    references: referencesView,
     tools: toolsView,
     agent: agentView,
   }[view]();
@@ -369,7 +444,7 @@ function findingModal(id) {
   const f = state.findings.find((f) => f.id === id) || {};
   modal(
     id ? "Review finding" : "Record finding",
-    "Capture impact, reproduction steps and evidence references.",
+    "Save a draft at any stage. Confirmed/reported requires a complete, attested evidence review.",
     `<form id="finding-form"><input type="hidden" name="id" value="${f.id || ""}"><div class="form-grid"><div class="full"><label>Engagement</label><select name="engagement_id">${state.engagements
       .filter((e) => !f.id || e.id === f.engagement_id)
       .map(
@@ -378,8 +453,57 @@ function findingModal(id) {
       )
       .join(
         "",
-      )}</select></div>${field("Title", "title", f.title || "")}${field("Affected target", "target", f.target || "")}<div><label>Severity</label><select name="severity">${["info", "low", "medium", "high", "critical"].map((v) => `<option ${v === (f.severity || "info") ? "selected" : ""}>${v}</option>`).join("")}</select></div><div><label>Status</label><select name="status">${["unverified", "confirmed", "dismissed", "reported"].map((v) => `<option ${v === (f.status || "unverified") ? "selected" : ""}>${v}</option>`).join("")}</select></div><div class="full"><label>Evidence and notes (Markdown)</label><textarea name="notes" rows="9">${esc(f.notes || "## Impact\n\n## Reproduction steps\n\n## Evidence\n")}</textarea></div></div><div class="inline-error" id="form-error"></div><div class="form-actions"><button class="btn primary">Save finding</button></div></form>`,
+      )}</select></div>${field("Title", "title", f.title || "")}${field("Affected target", "target", f.target || "")}<div><label>Severity</label><select name="severity">${["info", "low", "medium", "high", "critical"].map((v) => `<option ${v === (f.severity || "info") ? "selected" : ""}>${v}</option>`).join("")}</select></div><div><label>Status</label><select name="status">${["unverified", "confirmed", "dismissed", "reported"].map((v) => `<option ${v === (f.status || "unverified") ? "selected" : ""}>${v}</option>`).join("")}</select></div><div class="full"><label>Evidence and notes (Markdown)</label><textarea name="notes" rows="6">${esc(f.notes || "## Impact\n\n## Reproduction steps\n\n## Evidence\n")}</textarea></div></div>${reviewForm(f)}<div class="inline-error" id="form-error"></div><div class="form-actions"><button type="button" class="btn" data-action="check-readiness">Check readiness</button><button class="btn primary">Save finding</button></div></form>`,
   );
+}
+function reviewForm(f) {
+  const r = f.review || {};
+  const choice = (label, name, values) =>
+    `<div><label>${label}</label><select name="review_${name}">${values.map(([value, text]) => `<option value="${value}" ${value === (r[name] || "unknown") ? "selected" : ""}>${text}</option>`).join("")}</select></div>`;
+  return `<details class="review-section" open><summary>Evidence & eligibility review</summary><div class="note neutral">These checks assess completeness and your attestations. They do not independently verify exploitation. References never override policy or replace your own evidence.</div><div class="form-grid">${choice(
+    "Current policy eligibility",
+    "eligibility",
+    [
+      ["unknown", "Not reviewed"],
+      ["eligible", "Accepted asset and class"],
+      ["excluded", "Excluded by policy"],
+    ],
+  )}${choice("Impact assessment", "impact_assessment", [
+    ["unknown", "Not established"],
+    ["demonstrated", "Demonstrated security impact"],
+    ["informational", "Informational only"],
+    ["expected_behavior", "Expected behavior"],
+  ])}${choice("False-positive alternatives", "false_positive_assessment", [
+    ["unknown", "Not investigated"],
+    ["ruled_out", "Addressed using controls"],
+    ["identified", "Alternative explanation identified"],
+  ])}${field("Independent reproductions", "review_reproduction_attempts", r.reproduction_attempts || 0, "number")}${field("Policy review date", "review_policy_checked_at", r.policy_checked_at || "", "date")}${field("Reviewer name / handle", "review_reviewer", r.reviewer || "")}${Object.entries(
+    state.review_fields || {},
+  )
+    .map(
+      ([key, label]) =>
+        `<div class="full"><label for="review-${key}">${esc(label)}</label><textarea id="review-${key}" name="review_${key}" rows="2" placeholder="Specific evidence, observations or local evidence references…">${esc(r[key] || "")}</textarea></div>`,
+    )
+    .join(
+      "",
+    )}<div class="full"><label>Linked public reference reports (optional; Ctrl/Cmd to select several)</label><select name="reference_ids" multiple size="4">${(state.references || []).map((ref) => `<option value="${esc(ref.id)}" ${(r.reference_ids || []).includes(ref.id) ? "selected" : ""}>#${esc(ref.report_id)} · ${esc(ref.program)} · ${esc(ref.outcome)} · ${esc(ref.title)}</option>`).join("")}</select><p class="help">Public similarities cannot rule out an undisclosed duplicate or establish present eligibility.</p></div><label class="check-label full"><input type="checkbox" name="review_attested">I reviewed this finding’s evidence and current program policy. These are my observations; assumptions and limitations are stated.</label></div></details><div id="readiness-result">${readinessSummary(f.readiness)}</div>${(f.related_references || []).length ? `<details class="review-section"><summary>Related public reports · lexical matches</summary>${f.related_references.map((r) => `<p><a href="${esc(r.source_url)}" target="_blank" rel="noopener noreferrer">#${esc(r.report_id)} ${esc(r.title)}</a> · ${esc(r.outcome)}<span class="help">Matched terms: ${r.match_terms.map(esc).join(", ") || "Manually linked"}</span></p>`).join("")}</details>` : ""}`;
+}
+function findingPayload(form) {
+  const data = Object.fromEntries(new FormData(form));
+  const review = {};
+  for (const [key, value] of Object.entries(data))
+    if (key.startsWith("review_")) {
+      review[key.slice(7)] = value;
+      delete data[key];
+    }
+  review.reproduction_attempts = Number(review.reproduction_attempts || 0);
+  review.attested = form.elements.review_attested.checked;
+  review.reference_ids = [...form.elements.reference_ids.selectedOptions].map(
+    (o) => o.value,
+  );
+  delete data.reference_ids;
+  if (!data.id) delete data.id;
+  return { ...data, review };
 }
 async function logModal(id) {
   modal(
@@ -479,6 +603,43 @@ document.addEventListener("click", async (event) => {
       case "finding":
         findingModal();
         break;
+      case "check-readiness": {
+        const checked = await api(
+          "findings/check",
+          findingPayload($("#finding-form")),
+        );
+        $("#readiness-result").innerHTML = readinessSummary(checked.readiness);
+        $("#readiness-result").scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+        break;
+      }
+      case "import-references":
+        importReferenceModal();
+        break;
+      case "discover-references":
+        discoverReferenceModal();
+        break;
+      case "reference-detail":
+        referenceDetail(id);
+        break;
+      case "import-discovered": {
+        el.disabled = true;
+        try {
+          const result = await api("references/import", { urls: [id] });
+          await refresh(false);
+          toast(
+            result.errors.length
+              ? result.errors[0].error
+              : "Public report cached",
+            !!result.errors.length,
+          );
+        } finally {
+          el.disabled = false;
+        }
+        break;
+      }
       case "edit-finding":
         findingModal(id);
         break;
@@ -528,8 +689,41 @@ document.addEventListener("submit", async (event) => {
       view = "jobs";
       selected = data.engagement_id;
     } else if (form.getAttribute("id") === "finding-form") {
-      if (!data.id) delete data.id;
-      await api("findings", data);
+      await api("findings", findingPayload(form));
+    } else if (form.getAttribute("id") === "reference-import-form") {
+      const button = form.querySelector(
+        "button[type=submit],button.btn.primary",
+      );
+      button.disabled = true;
+      button.textContent = "Importing…";
+      try {
+        const result = await api("references/import", {
+          urls: data.urls,
+          refresh: form.elements.refresh.checked,
+        });
+        await refresh(false);
+        $("#reference-result").textContent =
+          `${result.imported.length} imported · ${result.cached.length} cached`;
+        $("#form-error").textContent = result.errors
+          .map((e) => `#${e.report_id}: ${e.error}`)
+          .join("\n");
+        if (!result.errors.length) {
+          closeModal();
+          view = "references";
+          render();
+          toast("Public reports cached");
+        }
+      } finally {
+        button.disabled = false;
+        button.textContent = "Import references";
+      }
+      return;
+    } else if (form.getAttribute("id") === "reference-discover-form") {
+      const results = await api("references/discover", data);
+      $("#discovery-results").innerHTML = results.results.length
+        ? `<div class="stack">${results.results.map((r) => `<article class="session-card"><h3>#${esc(r.report_id)} ${esc(r.title)}</h3><p>${esc(r.outcome)} · Disclosed ${esc(r.disclosed_at.slice(0, 10))}</p><button type="button" class="btn small" data-action="import-discovered" data-id="${esc(r.report_id)}">Import public reference</button></article>`).join("")}</div>`
+        : "<p>No explicitly disclosed reports matched this page.</p>";
+      return;
     } else if (form.getAttribute("id") === "path-form") {
       const paths = Object.fromEntries(
         state.tools.filter((t) => t.path).map((t) => [t.name, t.path]),
@@ -545,6 +739,7 @@ document.addEventListener("submit", async (event) => {
   }
 });
 document.addEventListener("change", (event) => {
+  if (event.target.id === "reference-filter") filterReferences();
   if (event.target.id === "engagement-filter") {
     selected = event.target.value;
     render();
@@ -554,6 +749,7 @@ document.addEventListener("change", (event) => {
   if (event.target.id === "tool-filter") filterTools();
 });
 document.addEventListener("input", (event) => {
+  if (event.target.id === "reference-search") filterReferences();
   if (event.target.id === "asset-search")
     $("#asset-table").innerHTML = assetTable(
       filtered(state.assets).filter((a) =>

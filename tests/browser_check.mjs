@@ -194,6 +194,59 @@ try {
     await evaluate("document.querySelectorAll('.tool-card').length"),
     1,
   );
+  await evaluate(
+    "document.querySelector('[data-view=\"findings\"]').click();document.querySelector('[data-action=\"finding\"]').click()",
+  );
+  await evaluate(
+    `(()=>{const f=document.querySelector('#finding-form');f.elements.title.value='Local fixture access-control observation';f.elements.target.value='http://127.0.0.1:9999/owned';f.elements.status.value='confirmed';f.requestSubmit();})()`,
+  );
+  await wait(
+    "document.querySelector('#form-error')?.textContent.includes('Evidence review required')",
+  );
+  await evaluate(
+    "document.querySelector('#finding-form').elements.status.value='unverified';document.querySelector('#finding-form').requestSubmit()",
+  );
+  await wait(
+    "!document.querySelector('dialog').open && document.body.textContent.includes('needs evidence')",
+  );
+  await evaluate(
+    "document.querySelector('[data-action=\"edit-finding\"]').click()",
+  );
+  await evaluate(
+    `(()=>{const f=document.querySelector('#finding-form');for(const input of f.querySelectorAll('textarea[name^=review_]'))input.value='Local fixture evidence with control comparisons and reproducible request references.';f.elements.review_eligibility.value='eligible';f.elements.review_impact_assessment.value='demonstrated';f.elements.review_false_positive_assessment.value='ruled_out';f.elements.review_reproduction_attempts.value=2;f.elements.review_policy_checked_at.value=new Date().toISOString().slice(0,10);f.elements.review_reviewer.value='Local fixture reviewer';f.elements.review_attested.checked=true;document.querySelector('[data-action=\"check-readiness\"]').click();})()`,
+  );
+  await wait(
+    "document.querySelector('#readiness-result')?.textContent.includes('ready for human review')",
+  );
+  const reviewShot = await page("Page.captureScreenshot", {
+    format: "png",
+    captureBeyondViewport: true,
+  });
+  await writeFile(
+    "/tmp/hunt-dashboard-review.png",
+    Buffer.from(reviewShot.data, "base64"),
+  );
+  await evaluate(
+    "document.querySelector('#finding-form').elements.status.value='confirmed';document.querySelector('#finding-form').requestSubmit()",
+  );
+  await wait(
+    "!document.querySelector('dialog').open && document.body.textContent.includes('confirmed')",
+  );
+  await evaluate(
+    "document.querySelector('[data-view=\"references\"]').click();document.querySelector('[data-action=\"import-references\"]').click()",
+  );
+  assert.equal(
+    await evaluate("document.querySelector('#reference-import-form')!==null"),
+    true,
+  );
+  await evaluate(
+    "document.querySelector('[data-action=\"close\"]').click();document.querySelector('[data-action=\"discover-references\"]').click()",
+  );
+  assert.equal(
+    await evaluate("document.querySelector('#reference-discover-form')!==null"),
+    true,
+  );
+  await evaluate("document.querySelector('[data-action=\"close\"]').click()");
   await page("Emulation.setDeviceMetricsOverride", {
     width: 390,
     height: 844,
@@ -217,7 +270,7 @@ try {
     Buffer.from(mobile.data, "base64"),
   );
   console.log(
-    "PASS browser: overview, engagement creation, session save/masking, authenticated command preview, agent handoff, tool filter, mobile layout",
+    "PASS browser: overview, engagements, sessions, command previews, handoff, tools, report readiness gate, confirmed review, reference dialogs, mobile layout",
   );
   console.log(
     "Screenshots: /tmp/hunt-dashboard-overview.png and /tmp/hunt-dashboard-mobile.png",

@@ -133,6 +133,88 @@ an unattended agent or stream its conversation. Saved dashboard sessions are not
 automatically injected into agent processes. Only one agent should act on the
 engagement at a time. Use the handoff rather than relying on cross-provider chat history.
 
+## Report readiness and public report references
+
+Open **Findings → Review** to record policy eligibility, reproduction attempts,
+prerequisites, control comparisons, sanitized request/response evidence, security
+boundary, demonstrated impact, false-positive checks, public duplicate searches,
+severity reasoning and remediation. **Check readiness** previews the result without
+saving. Drafts can be saved with gaps; **confirmed** and **reported** require all
+checks and a named reviewer attestation. Marking reported is local bookkeeping;
+nothing is submitted to HackerOne.
+
+Dispositions are `needs_evidence`, `likely_informational`,
+`likely_excluded_or_expected`, and `ready_for_human_review`. They are local review
+assessments, not HackerOne states. These deterministic checks assess text completeness,
+scope rules and the reviewer's assertions; they do not semantically verify evidence,
+replay exploits, predict acceptance, or eliminate undisclosed duplicates. A 30-day
+policy-review reminder is a local rule, not HackerOne policy. Changed finding content,
+scope or policy invalidates the earlier attestation. Existing legacy finding statuses
+are retained, but their current readiness shows any missing/stale review.
+
+Open **Public reports → Import public reports** and paste up to five public
+HackerOne report URLs or IDs. The collector anonymously fetches the site's public
+report JSON, accepts only explicit public+disclosed records, and stores source URLs,
+historical outcomes, disclosure/retrieval dates, visible bounty/currency, weakness,
+a source fingerprint and a short attributed excerpt (at most 100 words / 1200 chars).
+No private reports, attachments or full discussion threads are collected. Imports
+are cached; select refresh for an explicit re-fetch. Requests are serialized at most
+once per second, have response-size/time limits, and stop on errors/access controls.
+The website's public JSON representation is not the documented Hacker API and may
+change; failures are shown per report without attempting a bypass.
+
+Filter the library by visible rewards, triaged/resolved, or informative/not applicable
+outcomes. Unknown rewards remain unknown. Link references to a finding, or examine
+explainable lexical matches based on title/boundary terms and weakness. Matches and
+reward amounts never increase readiness or severity. A historical reward does not
+establish present eligibility: check this target's current asset/class exclusions,
+required evidence, account privileges and policy. Public disclosures have selection
+bias and may be incomplete/outdated.
+
+Optional **Search HackerOne API** uses the documented Hacktivity endpoint, retrieves
+10 results per explicit page request, forces `disclosed:true`, and locally rejects
+non-disclosed results. It needs separate HackerOne API credentials in the server
+environment (not engagement cookies):
+
+```bash
+export HUNT_H1_API_USERNAME='your-api-username'
+read -rs HUNT_H1_API_TOKEN
+export HUNT_H1_API_TOKEN
+./hunt-dashboard
+```
+
+Enter the token at the hidden shell prompt. Tokens are not stored in the dashboard
+database or sent to report pages. Search accepts documented Lucene filters such as
+`team:gitlab AND total_awarded_amount:>0`; program outcomes are historical context.
+Search only discovers candidates; click Import to fetch a disclosed report anonymously.
+
+Generated and existing engagement workspaces receive `QUALITY.md` and a bounded
+`public-references.json` index. Finding reviews also export Markdown and `.review.json`
+files. Shared agent instructions explicitly treat references as untrusted data,
+require independent target evidence and override blanket upstream dismissals of
+information-disclosure classes. This is retrieval/context guidance, not model training
+or an autonomous AI triage service.
+
+Reference methodology: [HackerOne report states](https://docs.hackerone.com/en/articles/8475030-report-states),
+[Hacktivity API](https://api.hackerone.com/hacker-resources/#get-hacktivity),
+[trial-report restrictions](https://docs.hackerone.com/en/articles/8474047-restricted-from-submissions).
+
+## Browser User-Agent
+
+httpx, Katana, Feroxbuster, ffuf, Nuclei, and the public-reference collector use a
+consistent Linux Chrome-style User-Agent. The Chrome major version is detected from
+the installed browser; without Chrome it falls back to major 154. Set `HUNT_USER_AGENT`
+before starting the server to select a different single-line browser User-Agent.
+Session-provided User-Agent headers are ignored so they cannot replace the configured
+identity. The selected identity is visible in Toolchain and command previews.
+
+The installed Subfinder v2.16.0 uses its own randomized browser User-Agents for its
+shared HTTP client; it has no CLI override for the dashboard's exact identity.
+Individual third-party provider clients remain tool-managed, so this dashboard does
+not claim to enforce every auxiliary provider request. DNS queries and direct TLS
+handshakes have no User-Agent. Terminal-launched external agents manage their own
+traffic; shared instructions request the configured identity for constructed HTTP calls.
+
 ## Storage and recovery
 
 All runtime state is under `.hunt-data/` by default (ignored by Git):

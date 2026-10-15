@@ -5,6 +5,7 @@ No public targets, DNS discovery, or external agent APIs are used.
 """
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 import tempfile
 import threading
 import time
@@ -12,6 +13,7 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
 from dashboard.server import App, Handler
+from dashboard.http_identity import browser_user_agent
 
 
 class Fixture(BaseHTTPRequestHandler):
@@ -20,7 +22,7 @@ class Fixture(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        self.seen.append(dict(path=self.path, cookie=self.headers.get("Cookie"), authorization=self.headers.get("Authorization")))
+        self.seen.append(dict(path=self.path, cookie=self.headers.get("Cookie"), authorization=self.headers.get("Authorization"), user_agent=self.headers.get("User-Agent")))
         if self.path.startswith("/redirect"):
             self.send_response(302)
             self.send_header("Location", "http://localhost:1/outside-scope")
@@ -65,6 +67,9 @@ def main():
             auth = app.save_auth(dict(engagement_id=e["id"], label="Account A", origin=origin, cookie="hunt_session=local-secret", headers="Authorization: Bearer local-only-token"))
             installed = {tool["name"] for tool in app.tools() if tool["installed"]}
             for tool in ("httpx", "katana", "feroxbuster", "ffuf", "nuclei"):
+                selected_tools = os.environ.get("HUNT_TEST_TOOLS", "").split(",")
+                if selected_tools != [""] and tool not in selected_tools:
+                    continue
                 if tool not in installed:
                     print("SKIP", tool, "not installed")
                     continue
@@ -79,6 +84,7 @@ def main():
                         time.sleep(.1)
                     seen = Fixture.seen[before:]
                     ok = result["status"] == "completed" and bool(seen)
+                    ok = ok and all(row["user_agent"] == browser_user_agent() for row in seen)
                     if authenticated:
                         ok = ok and all(row["cookie"] == "hunt_session=local-secret" and row["authorization"] == "Bearer local-only-token" for row in seen)
                     else:
