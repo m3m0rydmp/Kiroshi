@@ -141,7 +141,12 @@ try {
     "document.querySelector('[data-action=\"new-engagement\"]').click()",
   );
   await wait("document.querySelector('#engagement-form') !== null");
-  assert.equal(await evaluate("getComputedStyle(document.querySelector('#modal'), '::backdrop').backdropFilter"), "none");
+  assert.equal(
+    await evaluate(
+      "getComputedStyle(document.querySelector('#modal'), '::backdrop').backdropFilter",
+    ),
+    "none",
+  );
   await evaluate(
     `(()=>{const f=document.querySelector('#engagement-form');f.elements.name.value='Local lab / UI check';f.elements.scope.value='http://127.0.0.1/\\nhttps://hackerone.com/mcp\\nhttps://*.hackerone-user-content.com/';f.elements.policy.value='Loopback fixture only';f.elements.authorized.checked=true;f.requestSubmit();})()`,
   );
@@ -281,6 +286,103 @@ try {
     true,
   );
   await evaluate("document.querySelector('[data-action=\"close\"]').click()");
+  // Execution visibility uses fake binaries only; no engagement traffic is sent.
+  const fakePath = join(directory, "fake-tools");
+  await writeFile(
+    fakePath,
+    `#!/usr/bin/env python3
+import json,sys,time
+if '-h' in sys.argv or '--help' in sys.argv:
+ print('-max-time -rate-limit -url-scope -rcode -resp-only -status-code -no-fallback-scheme -tls-version -scan-mode -crawl-scope -disable-redirects --no-recursion --rate-limit -maxtime -noninteractive -no-interactsh')
+ sys.exit(0)
+print('Local execution fixture started',flush=True)
+time.sleep(1.5)
+print(json.dumps({'url':'http://127.0.0.1:9999/fixture','status_code':200}),flush=True)
+`,
+    { mode: 0o700 },
+  );
+  await evaluate(
+    `(async()=>{await api('settings',{paths:Object.fromEntries(['subfinder','dnsx','httpx','tlsx','urlfinder','katana','feroxbuster','ffuf','nuclei'].map(name=>[name,${JSON.stringify(fakePath)}]))});await refresh();navigate('jobs');})()`,
+  );
+  await evaluate(
+    `document.querySelector('[data-action="run"]').click();(()=>{const f=document.querySelector('#run-form');f.elements.tool.value='nuclei';f.elements.tool.dispatchEvent(new Event('change',{bubbles:true}));f.elements.target.value='http://127.0.0.1:9999';f.elements.auth_id.selectedIndex=1;f.requestSubmit();})()`,
+  );
+  await wait(
+    "document.querySelector('#job-output')?.textContent.includes('Local execution fixture started')",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('#job-meta').textContent.includes('Elapsed:')",
+    ),
+    true,
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('#job-meta').textContent.includes('nuclei')",
+    ),
+    true,
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('#job-activity').textContent.includes('Started nuclei')",
+    ),
+    true,
+  );
+  await wait("state.jobs.some(j=>j.tool==='nuclei' && j.status==='completed')");
+  await evaluate("document.querySelector('[data-action=rerun]').click()");
+  assert.equal(
+    await evaluate("document.querySelector('#run-form').elements.tool.value"),
+    "nuclei",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('#run-form').elements.auth_id.selectedIndex",
+    ),
+    1,
+  );
+  await evaluate(
+    "(async()=>{const j=state.jobs.find(j=>j.tool==='nuclei');await api('sessions/delete',{id:j.auth_id});await refresh(false);closeModal();runModal(j.engagement_id,j.target,j);document.querySelector('#run-form').requestSubmit();})()",
+  );
+  await wait(
+    "document.querySelector('#form-error')?.textContent.includes('Choose an available session')",
+  );
+  assert.equal(
+    await evaluate("state.jobs.filter(j=>j.tool==='nuclei').length"),
+    1,
+  );
+  await evaluate(
+    "closeModal();document.querySelector('[data-action=workflow]').click()",
+  );
+  assert.equal(
+    await evaluate("document.querySelector('#workflow-start').disabled"),
+    true,
+  );
+  await evaluate(
+    "document.querySelector('#workflow-form').elements.max_jobs.value=2;document.querySelector('[data-action=workflow-preview]').click()",
+  );
+  await wait("document.querySelector('#workflow-start')?.disabled===false");
+  assert.equal(
+    await evaluate(
+      "(document.querySelector('#workflow-preview').textContent.match(/httpx/g)||[]).length",
+    ),
+    4,
+  );
+  await evaluate("document.querySelector('#workflow-form').requestSubmit()");
+  await wait(
+    "document.querySelector('#workflow-meta')?.textContent.includes('Ordered stages')",
+  );
+  await wait(
+    "document.querySelector('#workflow-meta')?.textContent.includes('Coverage limited')",
+  );
+  const workflowShot = await page("Page.captureScreenshot", {
+    format: "png",
+    captureBeyondViewport: true,
+  });
+  await writeFile(
+    "/tmp/kiroshi-workflow.png",
+    Buffer.from(workflowShot.data, "base64"),
+  );
+  await evaluate("closeModal()");
   await page("Emulation.setDeviceMetricsOverride", {
     width: 390,
     height: 844,
@@ -304,7 +406,7 @@ try {
     Buffer.from(mobile.data, "base64"),
   );
   console.log(
-    "PASS browser: overview, engagements, sessions, command previews, handoff, tools, report readiness gate, confirmed review, reference dialogs, mobile layout",
+    "PASS browser: overview, engagements, sessions, command previews, handoff, tools, report readiness gate, confirmed review, reference dialogs, live tool output, rerun identity, ordered workflows, mobile layout",
   );
   console.log(
     "Screenshots: /tmp/kiroshi-overview.png and /tmp/kiroshi-mobile.png",

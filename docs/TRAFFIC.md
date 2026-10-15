@@ -30,6 +30,7 @@ can be used across protocols. Command previews show effective pacing before queu
 
 | Adapter | Rate control | Worker control | Extra delay / jitter | Block feedback |
 |---|---|---|---|---|
+| URLFinder | Native global/provider HTTP rate | Provider internals remain tool-managed | Unsupported | No general target status stream |
 | Subfinder | Native provider HTTP rate | Provider internals remain tool-managed | Unsupported | No general status stream; provider errors may be hidden |
 | dnsx | Native DNS query rate | DNS threads | Unsupported | DNS has no HTTP/WAF response status |
 | httpx | Native request rate | Threads | Delay in milliseconds; no jitter | Emitted JSON statuses; response headers included |
@@ -45,7 +46,7 @@ Fewer threads, scan startup, DNS resolution, response times and native tool beha
 can reduce the actual rate. Source-side requests and in-flight requests are not
 controlled by a network firewall. There is one dashboard scan worker globally.
 
-Retries are disabled for the active HTTP adapters where supported. Subfinder and
+Retries are disabled for the active HTTP adapters where supported. Subfinder, URLFinder and
 other provider internals can have their own behavior. Nuclei currently uses only
 the bundled inventory template, so none of this implies general exploit support.
 
@@ -83,7 +84,7 @@ finished, not that coverage is complete or that no requests were blocked interna
 HTTP adapters use the configured Chrome-style User-Agent. Add legitimate
 program-required identification headers using an exact-origin saved session; a
 cookie is optional if headers alone are needed. Existing header values remain
-private. The installed Subfinder uses its own browser User-Agents for provider
+private. The passive source clients in Subfinder and URLFinder use their own browser User-Agents for provider
 requests; individual provider clients remain tool-managed.
 
 The dashboard does not automatically rotate IPs/proxies, forge routing headers,

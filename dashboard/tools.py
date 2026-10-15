@@ -23,7 +23,7 @@ CATALOG = {
     "findomain": ("Recon", "Passive subdomain discovery", False),
     "assetfinder": ("Recon", "Related asset discovery", False),
     "chaos-client": ("Recon", "ProjectDiscovery dataset lookup", False),
-    "urlfinder": ("Recon", "Passive URL collection", False),
+    "urlfinder": ("Recon", "Passive URL collection", True),
     "gau": ("Archives", "Historical URL collection", False),
     "waybackurls": ("Archives", "Wayback URL collection", False),
     "puredns": ("DNS", "Wildcard-aware DNS resolution", False),
@@ -51,6 +51,7 @@ CATALOG = {
 
 
 SIGNATURES = {
+    "urlfinder": ("-max-time", "-url-scope", "-rate-limit"),
     "subfinder": ("-max-time", "-rate-limit"), "dnsx": ("-rcode", "-resp-only"),
     "httpx": ("-status-code", "-no-fallback-scheme"), "tlsx": ("-tls-version", "-scan-mode"),
     "katana": ("-crawl-scope", "-disable-redirects"), "feroxbuster": ("--no-recursion", "--rate-limit"),
@@ -221,6 +222,29 @@ def target_url(value, engagement):
     return url, name, port
 
 
+def passive_seed(value, engagement):
+    try:
+        name = host(value)
+        ipaddress.ip_address(name)
+        return False
+    except ValueError:
+        pass
+    try:
+        name = host(value)
+    except ValueError:
+        return False
+    return "*." + name in engagement["scope"] and not any(
+        matches(name, urlsplit(r).hostname if "://" in r else r) for r in engagement["excluded"])
+
+
+def resolve_target(engagement, payload):
+    value = payload.get("target", "")
+    if payload.get("tool") in ("subfinder", "urlfinder") and passive_seed(value, engagement):
+        # Passive collection queries third-party sources; this grants no apex probing.
+        return target_url(value, {"scope": [host(value)], "excluded": []})
+    return target_url(value, engagement)
+
+
 def command(engagement, payload, tools):
     tool = payload.get("tool")
     item = next((t for t in tools if t["name"] == tool), None)
@@ -232,16 +256,18 @@ def command(engagement, payload, tools):
         raise ValueError("Tool is incompatible with its adapter: " + item["diagnostic"])
     traffic = effective(engagement, payload)
     rate, concurrency, timeout = str(traffic["rate"]), str(traffic["concurrency"]), str(traffic["timeout"])
-    url, name, port = target_url(payload.get("target", ""), engagement)
+    url, name, port = resolve_target(engagement, payload)
     # Current adapters can crawl, probe alternate paths, or discard URL boundaries.
     # Require whole-host authorization until each supports a request-level scope gate.
-    if not allowed(name, engagement):
+    if not allowed(name, engagement) and not (tool in ("subfinder", "urlfinder") and passive_seed(payload.get("target", ""), engagement)):
         raise ValueError("This adapter requires whole-host scope; URL-only scope is saved but cannot be scanned by current adapters")
     exe = item["path"]
     duration = engagement["duration"]
     common = ["-silent", "-duc"]
     wordlist = str(ROOT / "dashboard" / "wordlist.txt")
-    if tool == "subfinder":
+    if tool == "urlfinder":
+        args = [exe, "-d", name, *common, "-j", "-rl", rate, "-timeout", timeout, "-max-time", "2", "-us", r"^https?://(?:[^/]+\.)?" + re.escape(name) + r"(?::[0-9]+)?(?:/|$)"]
+    elif tool == "subfinder":
         # Passive collection may discover excluded names, but never probes them.
         args = [exe, "-d", name, *common, "-rl", rate, "-timeout", timeout, "-max-time", "2"]
     elif tool == "dnsx":
@@ -271,6 +297,14 @@ def command(engagement, payload, tools):
             args += ["-p", f"{start:.3f}-{end:.3f}" if end > start else f"{start:.3f}"]
     else:
         args = [exe, "-u", url, "-t", str(ROOT / "dashboard" / "templates" / "server-header.yaml"), *common, "-j", "-nc", "-dr", "-ni", "-nh", "-no-stdin", "-rl", rate, "-c", concurrency, "-bs", "1", "-timeout", timeout, "-retries", "0"]
+    if payload.get("diagnostics") is True:
+        args = [arg for arg in args if arg not in ("-silent", "--silent")]
+        if tool in ("httpx", "nuclei"):
+            args += ["-stats", "-si", "2"]
+        elif tool in ("dnsx", "subfinder", "urlfinder"):
+            args += ["-stats"]
+        elif tool == "ffuf":
+            args += ["-v"]
     user_agent = browser_user_agent()
     if tool in ("httpx", "katana", "nuclei", "ffuf"):
         args += ["-H", "User-Agent: " + user_agent]

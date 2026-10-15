@@ -2,6 +2,7 @@
 let state = {
   engagements: [],
   jobs: [],
+  workflows: [],
   findings: [],
   tools: [],
   sessions: [],
@@ -12,6 +13,7 @@ let state = {
 let view = "overview",
   selected = "",
   activeLog = null,
+  activeWorkflow = null,
   pollBusy = false;
 const $ = (s) => document.querySelector(s);
 const esc = (v) =>
@@ -84,13 +86,69 @@ function newButton() {
 function engagementFilter() {
   return `<select id="engagement-filter" aria-label="Filter engagement"><option value="">All engagements</option>${state.engagements.map((e) => `<option value="${e.id}" ${e.id === selected ? "selected" : ""}>${esc(e.name)}</option>`).join("")}</select>`;
 }
+function workflowTable(rows) {
+  if (!rows.length) return "";
+  return panel(
+    "Engagement workflows",
+    `<div class="table-wrap"><table><thead><tr><th>Engagement</th><th>Stage</th><th>Status</th><th>Tool runs</th><th></th></tr></thead><tbody>${rows.map((w) => `<tr><td>${esc(engagementName(w.engagement_id))}</td><td>${Math.min(w.stage_index + 1, w.stages.length)} / ${w.stages.length}<div class="sub">${esc(w.stages[w.stage_index]?.title || "All stages ended")}</div></td><td>${pill(w.status)}${w.limited ? '<div class="sub">Coverage limited — review skipped targets/stages</div>' : ""}</td><td>${w.job_ids.length} / ${w.max_jobs}</td><td><button class="btn small" data-action="workflow-log" data-id="${w.id}">Live workflow ↗</button></td></tr>`).join("")}</tbody></table></div>`,
+  );
+}
+function workflowForm(id) {
+  const engagement =
+    state.engagements.find((e) => e.id === (id || selected)) ||
+    state.engagements[0];
+  if (!engagement) return engagementModal();
+  modal(
+    "Run engagement workflow",
+    "Tools execute one by one in the displayed order. New discoveries feed later stages; httpx runs again on newly found hosts and URLs.",
+    `<form id="workflow-form"><label>Engagement</label><select name="engagement_id">${state.engagements.map((e) => `<option value="${e.id}" ${e.id === engagement.id ? "selected" : ""}>${esc(e.name)}</option>`).join("")}</select><div class="form-grid"><div><label>Path discovery tool</label><select name="discovery"><option value="ffuf">ffuf</option><option value="feroxbuster">feroxbuster</option></select></div>${field("Maximum total tool jobs", "max_jobs", 200, "number")}${field("Maximum new targets per stage", "max_targets", 50, "number")}<div><label>HTTP identity</label><select name="auth_id"><option value="">Anonymous</option>${state.sessions
+      .filter((s) => s.engagement_id === engagement.id)
+      .map(
+        (s) =>
+          `<option value="${s.id}">${esc(s.label)} · ${esc(s.origin)}</option>`,
+      )
+      .join(
+        "",
+      )}</select></div></div><p class="help">A selected session applies only to its exact origin. Other targets and passive/DNS/TLS stages run anonymously. Each job inherits the engagement rate, timeout, and maximum duration. Workflows stop on failed or blocked jobs.</p><label class="check-label"><input type="checkbox" name="allow_repeat">Repeat previously completed checks (identical checks still run only once within this workflow)</label><div id="workflow-preview"></div><div class="inline-error" id="form-error"></div><div class="form-actions"><button type="button" class="btn" data-action="workflow-preview">Preview ordered workflow</button><button class="btn primary" id="workflow-start" disabled>Start workflow & watch live →</button></div></form>`,
+  );
+}
+async function workflowModal(id) {
+  modal(
+    "Live engagement workflow",
+    "Sequential stages · tool output updates every second. Scope, session, rate and duplicate checks apply to every job.",
+    '<div id="workflow-meta"></div><div id="job-meta" aria-live="polite"></div><div id="job-activity"></div><label>TOOL OUTPUT</label><pre class="terminal" id="job-output">Waiting for the first stage…</pre>',
+  );
+  activeWorkflow = id;
+  await updateWorkflow();
+}
+async function updateWorkflow() {
+  const id = activeWorkflow;
+  if (!id || !$("#modal").open) return;
+  const w = await api(`workflows/${id}`);
+  if (activeWorkflow !== id) return;
+  const opened = [...$("#workflow-meta").querySelectorAll("details")].map(
+    (d) => d.open,
+  );
+  $("#workflow-meta").innerHTML =
+    `<div class="row spread"><h3>${esc(engagementName(w.engagement_id))} · ${pill(w.status)}</h3>${["queued", "running"].includes(w.status) ? `<button class="btn small danger" data-action="workflow-cancel" data-id="${w.id}">Stop workflow</button>` : ""}</div><p>${w.job_ids.length} tool jobs launched · maximum ${w.max_jobs}. ${w.limited ? "Coverage limited: review skipped stages and limits." : ""}</p>${w.error ? `<div class="note neutral">${esc(w.error)}</div>` : ""}<p><strong>Stage ${Math.min(w.stage_index + 1, w.stages.length)} / ${w.stages.length}: ${esc(w.stages[w.stage_index]?.title || "All stages ended")}</strong></p><details><summary>Ordered stages</summary><ol class="workflow-stages">${w.stages.map((stage, i) => `<li class="${i === w.stage_index ? "current-stage" : ""}"><strong>${esc(stage.tool)}</strong> · ${esc(stage.title)}<span class="sub">${esc(stage.status || (["queued", "running"].includes(w.status) ? (i === w.stage_index ? w.status : "pending") : "not executed"))} · ${stage.launched || 0} launched · ${stage.skipped || 0} cached/reused${stage.reason ? " · " + esc(stage.reason) : ""}</span></li>`).join("")}</ol></details><details><summary>Workflow activity</summary>${(w.activity || []).map((a) => `<p class="help">${esc(new Date(a.at).toLocaleTimeString())} · ${esc(a.message)}</p>`).join("")}</details>`;
+  $("#workflow-meta")
+    .querySelectorAll("details")
+    .forEach((d, i) => {
+      if (opened[i] !== undefined) d.open = opened[i];
+    });
+  const jobId = w.active_job || w.job_ids.at(-1);
+  if (jobId) {
+    activeLog = jobId;
+    await updateLog();
+  }
+}
 function jobTable(jobs) {
   if (!jobs.length)
     return empty(
       "No jobs yet",
       "Create an engagement, preview a command, then queue your first run.",
     );
-  return `<div class="table-wrap"><table><thead><tr><th>Tool / target</th><th>Engagement</th><th>Identity</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>${jobs.map((j) => `<tr><td><strong class="mono">${esc(j.tool)}</strong><div class="sub path">${esc(j.target)}</div></td><td>${esc(engagementName(j.engagement_id))}</td><td>${esc(j.identity || "Anonymous")}</td><td>${pill(j.status)}${j.result_summary ? `<div class="sub">${esc(j.result_summary)}</div>` : ""}${j.waiting_for ? `<div class="sub">${j.manual_hold ? "Manual traffic hold" : "Waiting for cooldown"}</div>` : ""}</td><td class="text-muted">${when(j.created)}</td><td><button class="btn small" data-action="log" data-id="${j.id}">Logs ↗</button></td></tr>`).join("")}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>Tool / target</th><th>Engagement</th><th>Identity</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>${jobs.map((j) => `<tr><td><strong class="mono">${esc(j.tool)}</strong>${j.workflow_id ? `<div class="sub">Stage ${j.workflow_stage} · ${esc(j.stage_title)}</div>` : ""}<div class="sub path">${esc(j.target)}</div></td><td>${esc(engagementName(j.engagement_id))}</td><td>${esc(j.identity || "Anonymous")}</td><td>${pill(j.status)}<div class="sub">${j.elapsed_seconds || 0}s · ${j.log_bytes || 0} output bytes</div>${j.result_summary ? `<div class="sub">${esc(j.result_summary)}</div>` : ""}${j.waiting_for ? `<div class="sub">${j.manual_hold ? "Manual traffic hold" : "Waiting for cooldown"}</div>` : ""}</td><td class="text-muted">${when(j.created)}</td><td><button class="btn small" data-action="log" data-id="${j.id}">Logs ↗</button></td></tr>`).join("")}</tbody></table></div>`;
 }
 function overview() {
   const installed = state.tools.filter((t) => t.installed),
@@ -176,7 +234,10 @@ function engagementView() {
     heading(
       esc(e.name),
       "Anonymous and authenticated work share the same persistent cache.",
-      `<div class="row"><button class="btn" data-action="edit-engagement" data-id="${e.id}">Edit scope</button><button class="btn primary" data-action="run" data-id="${e.id}">＋ New run</button></div>`,
+      `<div class="row"><button class="btn" data-action="edit-engagement" data-id="${e.id}">Edit scope</button><button class="btn" data-action="run" data-id="${e.id}">Run one tool</button><button class="btn primary" data-action="workflow" data-id="${e.id}">Run engagement workflow</button></div>`,
+    ) +
+    workflowTable(
+      (state.workflows || []).filter((w) => w.engagement_id === e.id),
     ) +
     `<div class="grid-two"><div>${panel("Scope & operating limits", `<div class="panel-body stack"><div><label>IN SCOPE</label><code>${e.scope.map(esc).join("<br>")}</code></div><div><label>EXCLUDED</label><code>${e.excluded.map(esc).join("<br>") || "None specified"}</code></div><div><label>PROGRAM POLICY</label><span class="path text-muted">${esc(e.policy) || "Not provided"}</span></div><div class="row"><span class="pill">${e.rate} requests / second</span><span class="pill">${e.duration} second job limit</span><span class="pill">${esc(e.provider)}</span></div></div>`)}${panel("Cached discoveries", assetTable(state.assets.filter((a) => a.engagement_id === e.id).slice(0, 10)), `<button class="btn small" data-view="assets">All assets →</button>`)}${panel("Run history", jobTable(state.jobs.filter((j) => j.engagement_id === e.id).slice(0, 8)))}</div><div>${panel("Session credentials", `<div class="panel-body"><div class="note neutral">Start anonymously. Add cookies or headers here whenever you need an authenticated pass.</div>${sessions.length ? sessions.map((s) => `<div class="session-card"><div class="row spread"><h3>${esc(s.label)}</h3><span class="pill ready">Saved</span></div><p class="path">${esc(s.origin)}</p><code>${s.header_names.map(esc).join(", ")} · values hidden</code><div class="row"><button class="btn small" data-action="replace-session" data-id="${s.id}">Replace</button><button class="btn small danger" data-action="delete-session" data-id="${s.id}">Delete</button></div></div>`).join("") : "<p>No sessions saved. Anonymous runs are ready.</p>"}<div class="form-actions"><button class="btn" data-action="session" data-id="${e.id}">＋ Add session</button></div></div>`)}${panel("Continue with an agent", `<div class="panel-body"><p>The scaffold script generates a brief in this engagement workspace. Claude Code and Codex use shared instructions and handoff notes.</p><div class="form-actions"><button class="btn" data-view="agent">Open handoff ↗</button></div></div>`)}</div></div>`
   );
@@ -208,11 +269,12 @@ function jobsView() {
       "Jobs & logs",
       "Finished means the tool exited successfully. Review observations; it does not mean a vulnerability was found.",
       state.engagements.length
-        ? '<button class="btn primary" data-action="run">＋ New run</button>'
+        ? '<div class="row"><button class="btn" data-action="run">Run one tool</button><button class="btn primary" data-action="workflow">Run engagement workflow</button></div>'
         : "",
     ) +
     `<div class="toolbar">${engagementFilter()}<span class="text-muted">${state.jobs.filter(pending).length} pending · one worker</span></div>` +
     trafficHolds() +
+    workflowTable(filtered(state.workflows || [])) +
     panel("Execution history", jobTable(filtered(state.jobs)))
   );
 }
@@ -388,6 +450,7 @@ function navigate(next) {
 }
 function modal(title, intro, contents) {
   activeLog = null;
+  activeWorkflow = null;
   $("#modal-content").innerHTML =
     `<button class="dialog-close" data-action="close" aria-label="Close dialog">×</button><h2>${title}</h2><p class="intro">${intro}</p>${contents}`;
   if (!$("#modal").open) $("#modal").showModal();
@@ -395,6 +458,7 @@ function modal(title, intro, contents) {
 function closeModal() {
   $("#modal").close();
   activeLog = null;
+  activeWorkflow = null;
 }
 function field(label, name, value = "", type = "text", extra = "") {
   return `<div ${extra}><label for="f-${name}">${label}</label><input id="f-${name}" name="${name}" type="${type}" value="${esc(value)}"></div>`;
@@ -425,7 +489,7 @@ function sessionModal(engagementId, sessionId) {
     `<form id="session-form"><input type="hidden" name="engagement_id" value="${e.id}"><input type="hidden" name="id" value="${s.id || ""}"><div class="form-grid">${field("Identity / session label", "label", s.label || "Account A")}${field("Exact origin (scheme, host, port)", "origin", s.origin || new URL(scopeTarget(e)).origin)}<div class="full"><label>Cookie header value</label><input type="password" name="cookie" autocomplete="off" placeholder="session=…; csrf=…"></div><div class="full"><label>Additional headers (one Name: Value per line)</label><textarea name="headers" autocomplete="off" spellcheck="false" placeholder="Authorization: Bearer …&#10;X-CSRF-Token: …"></textarea><div class="help">Exact-origin binding. Redirects stay disabled. Replacing a session affects future runs only.</div></div></div><div class="inline-error" id="form-error"></div><div class="form-actions"><button type="button" class="btn" data-action="close">Cancel</button><button class="btn primary">Save session</button></div></form>`,
   );
 }
-function runModal(engagementId, target = "") {
+function runModal(engagementId, target = "", previous = null) {
   let e =
     state.engagements.find((e) => e.id === engagementId) ||
     state.engagements.find((e) => e.id === selected) ||
@@ -435,12 +499,40 @@ function runModal(engagementId, target = "") {
     return;
   }
   const ready = state.tools.filter(toolReady);
+  if (previous && !ready.some((t) => t.name === previous.tool)) {
+    toast(
+      `${previous.tool} is unavailable. Configure it in Toolchain before rerunning.`,
+      true,
+    );
+    return;
+  }
+  const chosenTool = previous?.tool || "httpx";
   modal(
-    "New tool run",
-    "Preview a bounded command. Existing recon stays cached.",
-    `<form id="run-form"><div class="form-grid"><div><label>Engagement</label><select name="engagement_id" id="run-engagement">${state.engagements.map((x) => `<option value="${x.id}" ${x.id === e.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></div><div><label>Tool / profile</label><select name="tool" id="run-tool">${ready.map((t) => `<option value="${t.name}" ${t.name === "httpx" ? "selected" : ""}>${esc(t.name)} — ${esc(t.description)}</option>`).join("")}</select></div><div class="full"><label>Target host or URL</label><input name="target" required value="${esc(target || scopeTarget(e))}" placeholder="https://app.example.com"></div><div class="full"><label>Identity / session</label><select name="auth_id" id="run-session"></select><div class="help">HTTP sessions are sent only to their exact origin. DNS/recon/TLS profiles use Anonymous.</div></div></div>${runTrafficFields(e)}<label class="check-label"><input type="checkbox" name="allow_repeat">Repeat completed run (explicitly rerun this tool, target and session)</label><div class="note neutral">Nuclei runs the bundled server-header inventory template. Content discovery uses a small bundled wordlist. Broader templates and wordlists need an adapter extension.</div><div class="preview-box" id="command-preview"></div><div class="inline-error" id="form-error"></div><div class="form-actions"><button type="button" class="btn" data-action="preview">Preview command</button><button class="btn primary" ${ready.length ? "" : "disabled"}>Queue run →</button></div></form>`,
+    previous ? `Rerun ${esc(previous.tool)}` : "Run one tool",
+    "One tool, one target. This does not run the whole engagement. The time limit is a maximum; a probe may finish in seconds.",
+    `<form id="run-form"><div class="form-grid"><div><label>Engagement</label><select name="engagement_id" id="run-engagement">${state.engagements.map((x) => `<option value="${x.id}" ${x.id === e.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></div><div><label>Tool / profile</label><select name="tool" id="run-tool">${ready.map((t) => `<option value="${t.name}" ${t.name === chosenTool ? "selected" : ""}>${esc(t.name)} — ${esc(t.description)}</option>`).join("")}</select></div><div class="full"><label>Target host or URL</label><input name="target" required value="${esc(target || scopeTarget(e))}" placeholder="https://app.example.com"></div><div class="full"><label>Identity / session</label><select name="auth_id" id="run-session"></select><div class="help">HTTP sessions are sent only to their exact origin. DNS/recon/TLS profiles use Anonymous.</div></div></div>${runTrafficFields(e)}<label class="check-label"><input type="checkbox" name="diagnostics" checked>Show tool diagnostics and progress where supported</label><label class="check-label"><input type="checkbox" name="allow_repeat">Repeat completed run (explicitly rerun this tool, target and session)</label><div class="note neutral">Nuclei runs the bundled server-header inventory template. Content discovery uses a small bundled wordlist. Broader templates and wordlists need an adapter extension.</div><div class="preview-box" id="command-preview"></div><div class="inline-error" id="form-error"></div><div class="form-actions"><button type="button" class="btn" data-action="preview">Preview command</button><button class="btn primary" ${ready.length ? "" : "disabled"}>Start tool & watch live →</button></div></form>`,
   );
   updateRunSessions();
+  if (previous) {
+    const form = $("#run-form");
+    const auth = previous.auth_id || "";
+    if ([...form.elements.auth_id.options].some((o) => o.value === auth)) {
+      form.elements.auth_id.value = auth;
+    } else {
+      form.elements.auth_id.insertAdjacentHTML(
+        "beforeend",
+        '<option value="__unavailable__" selected disabled>Previous session unavailable — choose an identity</option>',
+      );
+    }
+    form.elements.diagnostics.checked = previous.diagnostics !== false;
+    if (previous.traffic) {
+      for (const name of ["rate", "delay_ms", "jitter_ms"])
+        form.elements[name].value = previous.traffic[name] || 0;
+      form.elements.traffic_profile.value =
+        previous.traffic.profile || "inherit";
+      updateRunTraffic();
+    }
+  }
 }
 function updateRunSessions() {
   const form = $("#run-form");
@@ -553,9 +645,9 @@ function findingPayload(form) {
 }
 async function logModal(id) {
   modal(
-    "Job output",
-    "Live tail · last 100 KB displayed. Download retains the complete capped log.",
-    `<div id="job-meta"></div><pre class="terminal" id="job-output">Loading…</pre>`,
+    "Live tool execution",
+    "Updates every second · lifecycle events and last 100 KB of output. Download retains the complete capped tool log.",
+    `<div id="job-meta" aria-live="polite"></div><div id="job-activity"></div><label>TOOL OUTPUT</label><pre class="terminal" id="job-output">Loading…</pre>`,
   );
   activeLog = id;
   await updateLog();
@@ -565,8 +657,11 @@ async function updateLog() {
   const id = activeLog;
   const { job, output } = await api(`jobs/${id}/log`);
   if (activeLog !== id) return;
+  const index = state.jobs.findIndex((j) => j.id === id);
+  if (index >= 0) state.jobs[index] = job;
+  const commandOpen = $("#job-meta details")?.open;
   $("#job-meta").innerHTML =
-    `<div class="log-toolbar"><div class="row"><strong class="mono">${esc(job.tool)}</strong>${pill(job.status)}<span class="text-muted">${esc(job.identity || "Anonymous")}</span></div><div class="row"><a class="btn small" href="/api/jobs/${job.id}/download" download>Download</a><button class="btn small" data-action="rerun" data-id="${job.id}">Run again</button>${pending(job) ? `<button class="btn small danger" data-action="cancel-job" data-id="${job.id}">Cancel job</button>` : ""}</div></div><p class="help path">${esc(job.display)}</p><p class="help">${job.error ? esc(job.error) : "Exit code: " + (job.returncode ?? "pending")}</p><p class="help">${esc(job.result_summary || "")}</p>${job.processing_error ? `<div class="note neutral">${esc(job.processing_error)}</div>` : ""}<p class="help">Finished means the process exited successfully; observations still need review. A redirect is not a vulnerability.</p>${
+    `<div class="log-toolbar"><div class="row"><strong class="mono">${esc(job.tool)}</strong>${pill(job.status)}<span class="text-muted">${esc(job.identity || "Anonymous")}</span></div><div class="row"><a class="btn small" href="/api/jobs/${job.id}/download" download>Download</a><button class="btn small" data-action="rerun" data-id="${job.id}">Run again</button>${pending(job) ? `<button class="btn small danger" data-action="cancel-job" data-id="${job.id}">Cancel job</button>` : ""}</div></div><p class="path"><strong>${esc(job.tool)}</strong> → ${esc(job.target)}</p><p class="help">${esc(job.execution_notice)} Elapsed: ${job.elapsed_seconds || 0}s / maximum ${job.duration}s · ${job.log_bytes || 0} bytes of output · ${pending(job) ? "refreshing every second" : "execution ended"}</p><details><summary>Exact command</summary><pre class="terminal">${esc(job.display)}</pre></details><p class="help">${job.error ? esc(job.error) : "Exit code: " + (job.returncode ?? "pending")}</p><p class="help">${esc(job.result_summary || "")}</p>${job.processing_error ? `<div class="note neutral">${esc(job.processing_error)}</div>` : ""}<p class="help">Finished means the process exited successfully; observations still need review. A redirect is not a vulnerability.</p>${
       (job.traffic_events || []).length
         ? `<div class="note neutral">${job.traffic_events
             .map(
@@ -577,9 +672,23 @@ async function updateLog() {
             .join("<br>")}</div>`
         : ""
     }`;
+  if (commandOpen && $("#job-meta details")) $("#job-meta details").open = true;
+  const quiet =
+    pending(job) && job.status !== "queued"
+      ? `<p class="help">${job.log_bytes ? `Last output ${job.quiet_seconds || 0}s ago.` : "Process started; no tool output yet."} Tools may buffer output or print only matches. Elapsed time keeps updating while the process runs.</p>`
+      : "";
+  $("#job-activity").innerHTML =
+    `<div class="execution-activity"><label>ACTIVITY · ${esc(job.phase || job.status)}</label>${(job.activity || []).map((event) => `<div class="activity-line"><time>${esc(new Date(event.at).toLocaleTimeString())}</time><span>${esc(event.message)}</span></div>`).join("")}${quiet}</div>`;
   const pre = $("#job-output");
   const bottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 35;
-  pre.textContent = output;
+  if (pre.dataset.output !== output) {
+    pre.textContent =
+      output ||
+      (pending(job)
+        ? "Waiting for tool output…"
+        : "This tool emitted no output. Review the activity and exit code above.");
+    pre.dataset.output = output;
+  }
   if (bottom) pre.scrollTop = pre.scrollHeight;
 }
 async function loadAgent() {
@@ -614,6 +723,28 @@ document.addEventListener("click", async (event) => {
         selected = id;
         navigate("engagements");
         break;
+      case "workflow":
+        workflowForm(id);
+        break;
+      case "workflow-log":
+        await workflowModal(id);
+        break;
+      case "workflow-cancel":
+        await api("workflows/cancel", { id });
+        await refresh(false);
+        await updateWorkflow();
+        break;
+      case "workflow-preview": {
+        const form = $("#workflow-form");
+        const data = Object.fromEntries(new FormData(form));
+        data.allow_repeat = form.elements.allow_repeat.checked;
+        const plan = await api("workflows/preview", data);
+        form.dataset.planToken = plan.plan_token;
+        $("#workflow-preview").innerHTML =
+          `<p>${plan.initial_hosts} scoped seed hosts · ${plan.passive_seeds} passive seeds · up to ${plan.max_targets} new targets/stage · ${plan.max_jobs} total jobs</p><ol>${plan.stages.map((stage) => `<li><strong>${esc(stage.tool)}</strong> · ${esc(stage.title)} ${stage.available ? "" : "(unavailable — will be skipped)"}</li>`).join("")}</ol><p class="help">${esc(plan.notice)}</p>`;
+        $("#workflow-start").disabled = false;
+        break;
+      }
       case "run":
         runModal(id);
         break;
@@ -624,7 +755,7 @@ document.addEventListener("click", async (event) => {
       }
       case "rerun": {
         const j = state.jobs.find((j) => j.id === id);
-        runModal(j.engagement_id, j.target);
+        runModal(j.engagement_id, j.target, j);
         break;
       }
       case "session":
@@ -641,10 +772,15 @@ document.addEventListener("click", async (event) => {
         toast("Session deleted. Queued jobs retain their own snapshots.");
         break;
       case "preview": {
+        if ($("#run-form").elements.auth_id.value === "__unavailable__")
+          throw new Error(
+            "Choose an available session or explicitly select Anonymous before rerunning",
+          );
         const data = Object.fromEntries(new FormData($("#run-form")));
+        data.diagnostics = $("#run-form").elements.diagnostics.checked;
         const p = await api("jobs/preview", data);
         $("#command-preview").innerHTML =
-          `<label>COMMAND PREVIEW · ${esc(p.identity)} · ${p.duration}s limit</label><pre class="terminal">${esc(p.display)}</pre><p class="help">${esc(p.auth_notice)}</p><p class="help">${p.traffic.rate}/s · ${p.traffic.concurrency} worker(s) · ${p.traffic.timeout}s timeout · ${p.traffic.delay_ms}ms delay · ${p.traffic.jitter_ms}ms jitter</p>`;
+          `<label>COMMAND PREVIEW · ${esc(p.identity)} · ${p.duration}s limit</label><pre class="terminal">${esc(p.display)}</pre><p class="help">${esc(p.auth_notice)}</p><p class="help">${esc(p.execution_notice)}</p><p class="help">${p.traffic.rate}/s · ${p.traffic.concurrency} worker(s) · ${p.traffic.timeout}s timeout · ${p.traffic.delay_ms}ms delay · ${p.traffic.jitter_ms}ms jitter</p>`;
         break;
       }
       case "log":
@@ -753,7 +889,17 @@ document.addEventListener("submit", async (event) => {
   form.dataset.submitting = "true";
   const data = Object.fromEntries(new FormData(form));
   try {
-    if (form.getAttribute("id") === "engagement-form") {
+    if (form.getAttribute("id") === "workflow-form") {
+      data.allow_repeat = form.elements.allow_repeat.checked;
+      data.plan_token = form.dataset.planToken || "";
+      const workflow = await api("workflows", data);
+      selected = data.engagement_id;
+      view = "jobs";
+      await refresh();
+      await workflowModal(workflow.id);
+      toast("Workflow queued — stages run one by one");
+      return;
+    } else if (form.getAttribute("id") === "engagement-form") {
       data.authorized = form.elements.authorized.checked;
       data.traffic = {
         concurrency: data.traffic_concurrency,
@@ -778,9 +924,18 @@ document.addEventListener("submit", async (event) => {
       form.reset();
     } else if (form.getAttribute("id") === "run-form") {
       data.allow_repeat = form.elements.allow_repeat.checked;
-      await api("jobs", data);
+      data.diagnostics = form.elements.diagnostics.checked;
+      if (form.elements.auth_id.value === "__unavailable__")
+        throw new Error(
+          "Choose an available session or explicitly select Anonymous before rerunning",
+        );
+      const job = await api("jobs", data);
       view = "jobs";
       selected = data.engagement_id;
+      await refresh();
+      await logModal(job.id);
+      toast(`${job.tool} queued — watching live output`);
+      return;
     } else if (form.getAttribute("id") === "finding-form") {
       await api("findings", findingPayload(form));
     } else if (form.getAttribute("id") === "reference-import-form") {
@@ -839,6 +994,12 @@ document.addEventListener("submit", async (event) => {
   }
 });
 document.addEventListener("change", (event) => {
+  if (event.target.closest("#workflow-form")) {
+    delete $("#workflow-form").dataset.planToken;
+    $("#workflow-start").disabled = true;
+    $("#workflow-preview").innerHTML =
+      "Settings changed — preview the workflow again.";
+  }
   if (event.target.id === "run-traffic-profile") updateRunTraffic();
   if (event.target.id === "reference-filter") filterReferences();
   if (event.target.id === "engagement-filter") {
@@ -878,13 +1039,22 @@ function filterTools() {
 $("#refresh").addEventListener("click", () =>
   refresh().catch((e) => toast(e.message, true)),
 );
-$("#modal").addEventListener("close", () => (activeLog = null));
+$("#modal").addEventListener("close", () => {
+  activeLog = null;
+  activeWorkflow = null;
+});
 setInterval(async () => {
   if (pollBusy) return;
   pollBusy = true;
   try {
-    if (activeLog) await updateLog();
-    if (state.jobs.some(pending)) {
+    if (activeWorkflow) await updateWorkflow();
+    else if (activeLog) await updateLog();
+    if (
+      state.jobs.some(pending) ||
+      (state.workflows || []).some((w) =>
+        ["queued", "running"].includes(w.status),
+      )
+    ) {
       await refresh(false);
       if (!$("#modal").open && ["overview", "jobs"].includes(view)) render();
     }
@@ -893,5 +1063,5 @@ setInterval(async () => {
   } finally {
     pollBusy = false;
   }
-}, 2000);
+}, 1000);
 refresh().catch((error) => toast(error.message, true));

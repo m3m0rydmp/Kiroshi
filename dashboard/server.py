@@ -19,12 +19,13 @@ import time
 from urllib.parse import urlsplit
 import uuid
 
-from .tools import ROOT, CATALOG, allowed, command, discover, rules, target_url
+from .tools import ROOT, CATALOG, allowed, command, discover, rules, target_url, resolve_target
 from .readiness import FIELDS, NOTICE, content_hash, evaluate, normalize_review, related
 from .references import Collector, report_id
 from .http_identity import browser_user_agent
 from .traffic import Feedback, effective, normalize as normalize_traffic, HTTP_TOOLS, response_status
 from .config import default_data_dir, database_path
+from .workflows import WorkflowMixin, ACTIVE as ACTIVE_WORKFLOWS
 
 MAX_LOG = 10 * 1024 * 1024
 
@@ -61,7 +62,7 @@ def origin_of(url):
     return f"{parsed.scheme}://{authority}"
 
 
-class App:
+class App(WorkflowMixin):
     def __init__(self, data):
         self.data = Path(data).resolve()
         self.data.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -82,6 +83,11 @@ class App:
                 self.put("job", job)
                 for name in ("session.json", "headers.json", "request.http"):
                     (self.logpath(job).parent / name).unlink(missing_ok=True)
+        for workflow in self.all("workflow"):
+            if workflow["status"] in ACTIVE_WORKFLOWS:
+                workflow.update(status="interrupted", finished=now(), error="Server restarted; workflow will not resume automatically")
+                self.activity(workflow, "interrupted", workflow["error"])
+                self.put("workflow", workflow)
         self.refresh_quality_workspaces()
         self.worker = threading.Thread(target=self.work, daemon=True)
         self.worker.start()
@@ -127,6 +133,8 @@ class App:
         key = payload.get("id")
         with self.lock:
             previous = self.get("engagement", key) if key else None
+            if previous and any(w["engagement_id"] == key and w["status"] in ACTIVE_WORKFLOWS for w in self.all("workflow")):
+                raise ValueError("Cancel the active workflow before changing engagement scope or limits")
             if previous and any(j["engagement_id"] == key and j["status"] in ("queued", "running", "cancelling") for j in self.all("job")):
                 raise ValueError("Wait for or cancel pending jobs before changing scope")
             name = str(payload.get("name", "")).strip()
@@ -362,6 +370,8 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
         args = command(engagement, payload, self.tools())
         auth = self.selected_auth(payload, engagement)
         return dict(argv=args, display=shlex.join(args), duration=engagement["duration"],
+                    diagnostics=payload.get("diagnostics") is True,
+                    execution_notice="One tool on one target. The duration is a maximum, not a minimum; other engagement tools and targets are not queued.",
                     workspace=str(self.workspace(engagement)), auth_id=auth["id"] if auth else None,
                     traffic=effective(engagement, payload),
                     identity=auth["label"] if auth else "Anonymous",
@@ -440,7 +450,7 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
 
     def run_key(self, payload):
         engagement = self.get("engagement", payload["engagement_id"])
-        url, _, _ = target_url(payload["target"], engagement)
+        url, _, _ = resolve_target(engagement, payload)
         parsed = urlsplit(url)
         default_port = 443 if parsed.scheme == "https" else 80
         name = parsed.hostname
@@ -456,7 +466,7 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
                 auth_version = auth.get("revision", auth["updated"])
             except ValueError:
                 auth_version = "deleted-session"
-        if payload["tool"] in ("subfinder", "dnsx"):
+        if payload["tool"] in ("subfinder", "urlfinder", "dnsx"):
             url = name  # These adapters discard scheme, port and path.
         elif payload["tool"] == "tlsx":
             url = [name, parsed.port or 443]
@@ -506,9 +516,35 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
                 snapshot = directory / "session.json"
                 snapshot.write_text(json.dumps(headers))
                 snapshot.chmod(0o600)
+            self.activity(job, "queued", f"Queued {job['tool']} for one target; no other tools will start automatically")
             self.put("job", job)
             self.jobs.put(job["id"])
             return job
+
+    @staticmethod
+    def activity(job, phase, message):
+        event = dict(at=now(), phase=phase, message=message)
+        job["activity"] = (job.get("activity", []) + [event])[-60:]
+        job["phase"] = phase
+
+    def job_view(self, job):
+        result = dict(job)
+        clock = time.time()
+        def timestamp(field, fallback):
+            if field in job:
+                return job[field]
+            value = job.get(fallback)
+            return datetime.fromisoformat(value).timestamp() if value else None
+        started = timestamp("started_epoch", "started")
+        finished = timestamp("finished_epoch", "finished")
+        path = self.logpath(job)
+        stat = path.stat() if path.exists() else None
+        result["elapsed_seconds"] = round(max(0, (finished or clock) - started), 1) if started else 0
+        result["log_bytes"] = stat.st_size if stat else 0
+        result["quiet_seconds"] = round(max(0, (finished or clock) - stat.st_mtime), 1) if stat and stat.st_size else result["elapsed_seconds"]
+        result["execution_notice"] = (f"Workflow stage {job['workflow_stage']}: {job['stage_title']}. Later stages run sequentially."
+                                      if job.get("workflow_id") else "One tool on one target; this is not a full engagement scan.")
+        return result
 
     def logpath(self, job):
         return self.data / "jobs" / job["id"] / "output.log"
@@ -517,10 +553,12 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
         with self.lock:
             job = self.get("job", key)
             if job["status"] == "queued":
-                job.update(status="cancelled", finished=now())
+                job.update(status="cancelled", finished=now(), finished_epoch=time.time())
+                self.activity(job, "cancelled", "Cancelled before the tool started")
                 (self.logpath(job).parent / "session.json").unlink(missing_ok=True)
             elif job["status"] == "running":
                 job["status"] = "cancelling"
+                self.activity(job, "cancelling", "Cancellation requested; stopping the process")
                 if self.current == key and self.process:
                     self.kill(self.process)
             self.put("job", job)
@@ -570,6 +608,7 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
 
     def work(self):
         while not self.stop.is_set():
+            self.advance_workflows()
             try:
                 key = self.jobs.get(timeout=0.25)
             except queue.Empty:
@@ -596,6 +635,7 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
                 if gate:
                     if job.get("waiting_for") != gate["id"]:
                         job.update(waiting_for=gate["id"], not_before=gate["until"], manual_hold=gate["manual_hold"])
+                        self.activity(job, "waiting", "Waiting for an origin traffic hold to clear; tool has not started")
                         self.put("job", job)
                     self.jobs.put(key)
                     return
@@ -650,7 +690,8 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
                                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                            stderr=subprocess.STDOUT, start_new_session=True)
                 self.process, self.current = process, key
-                job.update(status="running", started=now(), waiting_for=None, not_before=None, manual_hold=False)
+                job.update(status="running", started=now(), started_epoch=time.time(), waiting_for=None, not_before=None, manual_hold=False)
+                self.activity(job, "running", f"Started {job['tool']} (PID {process.pid}); maximum duration {job['duration']} seconds")
                 feedback = Feedback(job.get("traffic", effective(self.get("engagement", job["engagement_id"]), {"tool": job["tool"]})))
                 self.put("job", job)
 
@@ -672,7 +713,7 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
                     else:
                         final = False
                         pending += chunk
-                        split = pending.rfind(b"\n") + 1
+                        split = max(pending.rfind(b"\n"), pending.rfind(b"\r")) + 1
                         if not split and len(pending) < 65536:
                             continue
                         split = split or len(pending)
@@ -699,6 +740,8 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
                     if final:
                         break
             code = process.wait()
+            timer.cancel()
+            process_finished = time.time()
             # Kill any descendants that outlived the main process.
             self.kill(process)
             with self.lock:
@@ -707,7 +750,8 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
                           "rate_limited" if blocked and blocked["status_code"] == 429 else "blocked" if blocked else
                           "timed_out" if expired.is_set() else "output_limit" if capped.is_set() else
                           "completed" if code == 0 else "failed")
-                job.update(status=status, finished=now(), returncode=code, traffic_events=feedback.events)
+                job.update(status=status, finished=now(), finished_epoch=process_finished, returncode=code, traffic_events=feedback.events)
+                self.activity(job, "processing", f"{job['tool']} exited with code {code}; reading cached observations")
                 if blocked:
                     job["error"] = f"Stopped on HTTP {blocked['status_code']}; review traffic feedback before rerunning"
                     self.set_traffic_gate(job, blocked)
@@ -720,10 +764,13 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
                     # Output processing must not relabel a successful process as failed.
                     job["processing_error"] = "Output processing was incomplete; inspect the log before using cached results"
                     self.put("job", job)
+                self.activity(job, status, job.get("error") or job["result_summary"])
+                self.put("job", job)
         except Exception as exc:
             with self.lock:
                 job = self.get("job", key)
-                job.update(status="failed", finished=now(), error=str(exc))
+                job.update(status="failed", finished=now(), finished_epoch=time.time(), error=str(exc))
+                self.activity(job, "failed", "Tool execution failed; inspect the error and log")
                 self.put("job", job)
         finally:
             for file in secret_files:
@@ -892,7 +939,7 @@ class Handler(BaseHTTPRequestHandler):
             path = urlsplit(self.path).path
             if path == "/api/state":
                 return self.respond(dict(token=self.app.token, engagements=self.app.all("engagement"),
-                                         jobs=self.app.all("job"), findings=[self.app.finding_view(f) for f in self.app.all("finding")],
+                                         jobs=[self.app.job_view(j) for j in self.app.all("job")], workflows=[self.app.workflow_view(w) for w in self.app.all("workflow")], findings=[self.app.finding_view(f) for f in self.app.all("finding")],
                                          tools=self.app.tools(), sessions=self.app.all("auth"),
                                          assets=self.app.all("asset"), data_dir=str(self.app.data),
                                          traffic_gates=[g for g in self.app.all("traffic_gate") if g.get("manual_hold") or g.get("until", 0) > time.time()],
@@ -910,8 +957,11 @@ class Handler(BaseHTTPRequestHandler):
                         stream.seek(max(0, file.stat().st_size - 100000))
                         output = stream.read(100000).decode(errors="replace")
                 else:
-                    output = "Waiting for worker…"
-                return self.respond(dict(job=job, output=output))
+                    output = ""
+                return self.respond(dict(job=self.app.job_view(job), output=output))
+            if len(parts) == 3 and parts[:2] == ["api", "workflows"]:
+                workflow = self.app.get("workflow", parts[2])
+                return self.respond(self.app.workflow_view(workflow))
             if len(parts) == 3 and parts[:2] == ["api", "agent"]:
                 return self.respond(self.app.agent(parts[2]))
             static = {"/": ("index.html", "text/html; charset=utf-8"),
@@ -938,6 +988,12 @@ class Handler(BaseHTTPRequestHandler):
             path = urlsplit(self.path).path
             if path == "/api/engagements":
                 return self.respond(self.app.save_engagement(payload))
+            if path == "/api/workflows/preview":
+                return self.respond(self.app.workflow_plan(payload))
+            if path == "/api/workflows":
+                return self.respond(self.app.workflow_view(self.app.start_workflow(payload)), 201)
+            if path == "/api/workflows/cancel":
+                return self.respond(self.app.cancel_workflow(payload.get("id")))
             if path == "/api/jobs/preview":
                 return self.respond(self.app.preview(payload))
             if path == "/api/sessions":

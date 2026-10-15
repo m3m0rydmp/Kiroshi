@@ -34,9 +34,10 @@ scans. The dashboard starts even when every optional tool is missing.
 
 - Engagement scope, exclusions, rate ceilings and bounded job execution.
 - Automatic machine-local tool discovery, explicit path overrides and compatibility checks.
-- Eight scan adapters: Subfinder, dnsx, httpx, tlsx, Katana, Feroxbuster, ffuf and Nuclei.
+- Nine scan adapters: Subfinder, dnsx, httpx, tlsx, URLFinder, Katana, Feroxbuster, ffuf and Nuclei.
 - A broader 36-tool inventory; inventory-only entries do not imply runnable support.
-- Anonymous recon cache, named cookie/header sessions, live logs and result downloads.
+- Previewable sequential engagement workflows, with HTTP checks after each discovery stage.
+- Anonymous recon cache, named cookie/header sessions, live activity, tool diagnostics and result downloads.
 - Gentle pacing, tool-supported delay/jitter and observed block-response cooldowns.
 - Evidence-readiness checks before confirmed/reported status and public disclosure references.
 - Shared instructions and handoff files for terminal-based Claude Code/Codex sessions.
@@ -49,7 +50,7 @@ HackerOne or automatically exploit findings.
 
 1. Create an engagement with its policy URL and explicitly authorized hosts/exclusions.
 2. Check **Toolchain**; install any tools you need and use **Check binaries**.
-3. Preview and queue an anonymous run. Results persist in **Asset cache** and **Jobs & logs**.
+3. Choose **Run engagement workflow**, preview the ordered stages, then start and watch live output. Use **Run one tool** for an individual check. Results persist in **Asset cache** and **Jobs & logs**.
 4. Add an exact-origin cookie/header session when ready; run again against cached assets.
 5. Review candidates in **Findings** and use **Public reports** for attributed historical context.
 6. Save **Agent handoff**, then copy the terminal command for your configured agent client.

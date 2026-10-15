@@ -70,12 +70,13 @@ The catalog detects 36 common executables from PATH and standard WSL Go/Cargo/lo
 binary directories. Toolchain supports absolute executable path overrides. It does
 not install, update, or automatically execute discovered tools.
 
-Eight adapters:
+Nine adapters:
 
 | Tool | Initial runnable profile |
 |---|---|
 | Subfinder | Passive discovery for a selected in-scope seed hostname |
 | dnsx | A / AAAA / CNAME inventory |
+| URLFinder | Scoped passive URL discovery from public sources |
 | httpx | Selected-scheme status/title/technology inventory, no redirects |
 | tlsx | Certificate / TLS inventory on selected port or 443 |
 | Katana | Non-headless, depth-two crawl confined to the selected origin |
@@ -84,7 +85,7 @@ Eight adapters:
 | Nuclei | Bundled server-header inventory template only |
 
 Other entries are **inventory-only**, including Amass, Findomain, assetfinder, Chaos,
-URLFinder, gau, waybackurls, puredns, shuffledns, dnsgen, alterx, Naabu, Nmap, Arjun,
+gau, waybackurls, puredns, shuffledns, dnsgen, alterx, Naabu, Nmap, Arjun,
 ParamSpider, Dalfox, sqlmap, crlfuzz, Interactsh, Gitleaks, TruffleHog, jq, anew, uro,
 unfurl, Notify, Claude Code, and Codex. They need a reviewed adapter before dashboard
 execution. There is no arbitrary shell-command input.
@@ -96,7 +97,7 @@ header support and exact-origin behavior; never persist credentials in the job a
 
 Subfinder uses an isolated home, so your existing provider API-key config is not
 loaded in this version. Broad Nuclei template selection, custom wordlists, port-scan
-execution, archive import, and multi-stage automated pipelines are not implemented.
+execution and archive import from other inventory tools are not implemented.
 The dashboard does not currently configure Burp MCP or HTTP Workbench MCP.
 
 ## Sessions and local security
@@ -276,3 +277,58 @@ normalized target and session revision. Completed runs also require checking
 marker survives removal of jobs/logs; cached discoveries remain available.
 Changing credentials permits a new authenticated pass. Failed, cancelled or
 interrupted jobs may be retried. Engagement names must be unique (ignoring case).
+
+
+## Sequential engagement workflows and live execution
+
+**Run engagement workflow** opens a preview of these ordered stages:
+
+1. Subfinder: passive subdomain discovery.
+2. dnsx: resolve scoped hosts, including eligible discoveries.
+3. httpx: check scoped HTTP and HTTPS targets after host discovery.
+4. tlsx: certificate/TLS inventory.
+5. URLFinder: passive public URL collection.
+6. httpx: check newly discovered URLs.
+7. Katana: crawl responding origins.
+8. httpx: check newly crawled URLs.
+9. ffuf or Feroxbuster: bounded path discovery on responding origins.
+10. httpx: check newly discovered paths.
+11. Nuclei: the bundled server-header inventory template only.
+
+One process runs at a time. Stage inputs are built from current scoped cache
+observations after earlier jobs finish; adding a domain alone never starts work.
+Wildcard base domains may seed passive Subfinder/URLFinder collection without
+being authorized for active apex probes. Active targets still need explicit host
+scope. Every discovered URL is filtered against current scope/exclusions.
+
+The default limits are 50 new tool targets per stage and 200 total jobs; preview
+and edit these before starting. Each job inherits the engagement's rate,
+concurrency, timeout and duration ceiling. Candidate lists are capped at 2000
+entries. Missing tools and limits produce **completed limited**, with skipped
+stages/targets visible. Failed, blocked, timed-out or incompletely processed jobs
+stop the workflow. Traffic holds continue to apply. Server restart interrupts a
+workflow and never resumes network activity automatically.
+
+Identical tool/target/session checks reuse existing completion markers and cache.
+The repeat checkbox permits a fresh pass over earlier runs, while each effective
+check still executes only once within the new workflow. HTTP checks after later
+stages probe new URLs rather than repeatedly probing the same root. A selected
+session applies only to its exact origin; other targets run anonymously. Replacing
+or deleting that session stops further workflow scheduling. Scope edits require
+stopping the workflow first.
+
+Queueing an individual tool or a workflow opens its live execution view. It shows
+the tool and target, stage order, lifecycle timestamps, elapsed time, log size,
+exit code, observations, and full command preview. Tool diagnostics are enabled
+by default in the UI, with native statistics where supported. Raw debugging
+modes that print request headers are not enabled. Log output remains capped and
+session values are redacted. Some tools buffer output; a quiet log is shown as
+quiet rather than being presented as completed. Logs refresh every second.
+
+**Run one tool** remains available. A fast individual httpx probe is only one
+probe, not an entire engagement. Rerun retains its original tool, target, saved
+identity and pacing settings rather than silently selecting httpx again.
+
+Subfinder and URLFinder manage their own browser-style user agents for passive
+source queries. Other HTTP adapters use Kiroshi's configured browser identity.
+Passive provider configurations remain isolated from the user's normal home.

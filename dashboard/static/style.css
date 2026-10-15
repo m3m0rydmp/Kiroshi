@@ -1269,3 +1269,43 @@ main,
     max-width: 100%;
   }
 }
+
+.execution-activity {
+  padding: 14px;
+  margin: 14px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.activity-line {
+  display: flex;
+  gap: 12px;
+  padding: 6px 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.activity-line time {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+#job-output {
+  max-height: 45vh;
+  min-height: 140px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.workflow-stages {
+  margin: 12px 0 18px;
+  padding-left: 24px;
+}
+.workflow-stages li {
+  padding: 6px 8px;
+}
+.workflow-stages .sub {
+  display: block;
+}
+.current-stage {
+  background: #b4ebf612;
+  border-radius: 6px;
+}

@@ -74,7 +74,7 @@ class InstallerTests(unittest.TestCase):
             args = ["/bin/bash", str(checkout / "install.sh"), "--bin-dir", str(binary_dir)]
             result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("0 / 8", result.stdout)
+            self.assertIn("0 / 9", result.stdout)
             launcher = binary_dir / "kiroshi"
             self.assertTrue(launcher.is_symlink())
             result = subprocess.run([str(launcher), "--help"], env=env, capture_output=True, text=True, timeout=10)

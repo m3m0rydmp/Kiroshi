@@ -75,7 +75,7 @@ def main():
                     continue
                 for authenticated in (False, True):
                     before = len(Fixture.seen)
-                    job = app.enqueue(dict(engagement_id=e["id"], tool=tool, target=origin, auth_id=auth["id"] if authenticated else ""))
+                    job = app.enqueue(dict(engagement_id=e["id"], tool=tool, target=origin, auth_id=auth["id"] if authenticated else "", diagnostics=os.environ.get("KIROSHI_TEST_DIAGNOSTICS") == "1"))
                     deadline = time.monotonic() + 35
                     while time.monotonic() < deadline:
                         result = app.get("job", job["id"])

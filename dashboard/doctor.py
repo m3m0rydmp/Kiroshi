@@ -32,7 +32,7 @@ def main():
         print(json.dumps(result, indent=2))
     else:
         print(f"Kiroshi installation doctor — Python {result['python']}")
-        print(f"{result['ready']} / 8 scan adapters ready; missing tools do not prevent dashboard startup.\n")
+        print(f"{result['ready']} / {sum(t['adapter'] for t in tools)} scan adapters ready; missing tools do not prevent dashboard startup.\n")
         for tool in tools:
             label = "READY" if tool["runnable"] else "INVENTORY" if tool["installed"] and not tool["adapter"] else "CHECK" if tool["installed"] else "MISSING"
             print(f"{label:9} {tool['name']:20} {tool['path'] or 'not found'}")

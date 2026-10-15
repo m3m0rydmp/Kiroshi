@@ -82,6 +82,7 @@ releases/packages from each tool's maintainer, then run the doctor again.
 
 | Adapter | Official installation source |
 |---|---|
+| URLFinder | [ProjectDiscovery repository](https://github.com/projectdiscovery/urlfinder) |
 | Subfinder | [ProjectDiscovery install guide](https://docs.projectdiscovery.io/opensource/subfinder/install) |
 | dnsx | [ProjectDiscovery install guide](https://docs.projectdiscovery.io/opensource/dnsx/install) |
 | httpx | [ProjectDiscovery install guide](https://docs.projectdiscovery.io/opensource/httpx/install) |
@@ -94,6 +95,7 @@ releases/packages from each tool's maintainer, then run the doctor again.
 For a supported, current Go toolchain, the maintainer installation commands are:
 
 ```bash
+go install github.com/projectdiscovery/urlfinder/cmd/urlfinder@latest
 go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
 go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest
 go install github.com/projectdiscovery/httpx/cmd/httpx@latest
@@ -132,7 +134,7 @@ python3 -m dashboard.doctor --require-tools
 python3 -m dashboard.doctor --data-dir "$HOME/.local/share/kiroshi"
 ```
 
-`--require-tools` exits nonzero if any of the eight scan adapters is missing or
+`--require-tools` exits nonzero if any of the nine scan adapters is missing or
 incompatible. Normal checks allow missing optional tools. JSON output includes local
 paths; review it before sharing. The checks verify expected flags, not every possible
 behavior/version combination. Upgrade or choose the correct binary when flagged
