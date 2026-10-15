@@ -149,7 +149,7 @@ function overview() {
   );
 }
 function engagementTable(rows) {
-  return `<div class="table-wrap"><table><thead><tr><th>Engagement</th><th>Scope</th><th>Budget</th><th></th></tr></thead><tbody>${rows.map((e) => `<tr><td><strong>${esc(e.name)}</strong><div class="sub">${state.sessions.filter((s) => s.engagement_id === e.id).length} saved sessions</div></td><td class="mono">${e.scope.map(esc).join("<br>")}</td><td>${e.rate}/s <span class="text-muted">· ${e.duration}s</span></td><td><button class="btn small" data-action="open-engagement" data-id="${e.id}">Open →</button></td></tr>`).join("")}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>Engagement</th><th>Scope</th><th>Run limits</th><th></th></tr></thead><tbody>${rows.map((e) => `<tr><td><strong>${esc(e.name)}</strong><div class="sub">${state.sessions.filter((s) => s.engagement_id === e.id).length} saved sessions</div></td><td class="mono">${e.scope.map(esc).join("<br>")}</td><td>${e.rate}/s <span class="text-muted">· ${e.duration}s</span></td><td><button class="btn small" data-action="open-engagement" data-id="${e.id}">Open →</button></td></tr>`).join("")}</tbody></table></div>`;
 }
 function engagementView() {
   const e = state.engagements.find((x) => x.id === selected);
