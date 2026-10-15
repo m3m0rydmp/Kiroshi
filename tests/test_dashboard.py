@@ -68,6 +68,43 @@ class WorkspaceTests(unittest.TestCase):
         self.app.db.close()
         self.directory.cleanup()
 
+    def test_duplicate_engagement_name_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "already exists"):
+            self.app.save_engagement(dict(name="  LOCAL LAB  ", scope="127.0.0.1", authorized=True))
+        self.assertEqual(len(self.app.all("engagement")), 1)
+        self.app.save_engagement(self.e)
+
+    def test_duplicate_jobs_and_completed_markers(self):
+        from concurrent.futures import ThreadPoolExecutor
+        executable = Path(self.directory.name) / "dedup-tool"
+        executable.write_text('#!/usr/bin/env python3\nimport time\ntime.sleep(.1)\nprint(\'{"status_code":301,"location":"https://elsewhere.test"}\')\n')
+        executable.chmod(0o700)
+        self.app.put("settings", dict(id="local", paths={"httpx": str(executable)}))
+        payload = dict(engagement_id=self.e["id"], tool="httpx", target="https://127.0.0.1")
+        def submit():
+            try:
+                return self.app.enqueue(payload)
+            except ValueError:
+                return None
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            results = list(pool.map(lambda _: submit(), range(6)))
+        accepted = [j for j in results if j]
+        self.assertEqual(len(accepted), 1)
+        result = self.wait_job(accepted[0]["id"])
+        self.assertIn("HTTP 301: 1", result["result_summary"])
+        with self.assertRaisesRegex(ValueError, "already finished"):
+            self.app.enqueue({**payload, "target": "https://127.0.0.1:443/"})
+        # Removing jobs/logs must not discard the duplicate marker.
+        with self.app.lock:
+            self.app.db.execute("DELETE FROM records WHERE kind='job'")
+            self.app.db.commit()
+        self.app.shutdown()
+        self.app.db.close()
+        self.app = App(self.directory.name)
+        with self.assertRaisesRegex(ValueError, "already finished"):
+            self.app.enqueue(payload)
+        self.assertEqual(self.wait_job(self.app.enqueue({**payload, "allow_repeat": True})["id"])["status"], "completed")
+
     def test_original_scaffold_and_shared_state(self):
         workspace = self.app.workspace(self.e)
         self.assertTrue((workspace / "upstream/brief/AGENT.md").exists())

@@ -1,5 +1,6 @@
 """Dependency-free, loopback-only dashboard and serialized WSL job runner."""
 import argparse
+import hashlib
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -113,6 +114,8 @@ class App:
             name = str(payload.get("name", "")).strip()
             if not name or len(name) > 120:
                 raise ValueError("Engagement name is required (maximum 120 characters)")
+            if any(e["id"] != key and e["name"].strip().casefold() == name.casefold() for e in self.all("engagement")):
+                raise ValueError("An engagement with this name already exists; open it instead of creating a duplicate")
             scope = rules(payload.get("scope", ""))
             if not scope:
                 raise ValueError("At least one explicit in-scope hostname is required")
@@ -381,7 +384,7 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
         file.chmod(0o600)
         return self.put("auth", dict(id=key, engagement_id=engagement["id"], label=label,
                                      origin=f"{parsed.scheme}://{parsed.netloc}",
-                                     header_names=list(headers), updated=now()))
+                                     header_names=list(headers), updated=now(), revision=identifier()))
 
     def delete_auth(self, key):
         self.get("auth", key)
@@ -391,13 +394,59 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
             (self.data / "secrets" / f"{key}.json").unlink(missing_ok=True)
         return {"ok": True}
 
+    def run_key(self, payload):
+        engagement = self.get("engagement", payload["engagement_id"])
+        url, _, _ = target_url(payload["target"], engagement)
+        parsed = urlsplit(url)
+        default_port = 443 if parsed.scheme == "https" else 80
+        name = parsed.hostname
+        authority = f"[{name}]" if ":" in name else name
+        if parsed.port and parsed.port != default_port:
+            authority += f":{parsed.port}"
+        url = parsed._replace(netloc=authority, path=parsed.path or "/").geturl()
+        auth_id = payload.get("auth_id") or None
+        auth_version = payload.get("auth_version")
+        if auth_id and auth_version is None:
+            try:
+                auth = self.get("auth", auth_id)
+                auth_version = auth.get("revision", auth["updated"])
+            except ValueError:
+                auth_version = "deleted-session"
+        identity = [engagement["id"], payload["tool"], url, auth_id, auth_version]
+        return hashlib.sha256(json.dumps(identity, separators=(",", ":")).encode()).hexdigest()
+
+    def historical_run_key(self, job):
+        if job.get("run_key"):
+            return job["run_key"]
+        try:
+            return self.run_key(job)
+        except ValueError:
+            return None  # Older targets may no longer be in the edited scope.
+
+    def remember_run(self, job):
+        if job["status"] == "completed":
+            key = self.historical_run_key(job)
+            if key is None:
+                return
+            # Minimal duplicate marker survives log deletion; no output or credentials.
+            self.put("completed_run", dict(id=key, engagement_id=job["engagement_id"], finished=job.get("finished")))
+
     def enqueue(self, payload):
         with self.lock:
             if len([j for j in self.all("job") if j["status"] in ("queued", "running", "cancelling")]) >= 20:
                 raise ValueError("Queue full (20 pending jobs)")
             preview = self.preview(payload)
+            run_key = self.run_key(payload)
+            matches = [j for j in self.all("job") if self.historical_run_key(j) == run_key]
+            if any(j["status"] in ("queued", "running", "cancelling") for j in matches):
+                raise ValueError("This tool, target and session already has a pending run")
+            completed = any(j["status"] == "completed" for j in matches) or any(r["id"] == run_key for r in self.all("completed_run"))
+            if completed and payload.get("allow_repeat") is not True:
+                raise ValueError("This tool, target and session already finished. Use cached results or explicitly enable Repeat completed run")
             job = dict(id=identifier(), engagement_id=payload["engagement_id"], tool=payload["tool"],
-                       target=payload["target"], status="queued", created=now(), started=None,
+                       target=payload["target"], run_key=run_key,
+                       auth_version=(lambda auth: auth.get("revision", auth["updated"]))(self.get("auth", preview["auth_id"])) if preview["auth_id"] else None,
+                       status="queued", created=now(), started=None,
                        finished=None, returncode=None, error=None, **preview)
             if job["auth_id"]:
                 headers = json.loads((self.data / "secrets" / f"{job['auth_id']}.json").read_text())
@@ -610,7 +659,9 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
                 if blocked:
                     job["error"] = f"Stopped on HTTP {blocked['status_code']}; review traffic feedback before rerunning"
                     self.set_traffic_gate(job, blocked)
+                job["result_summary"] = self.result_summary(job)
                 self.put("job", job)
+                self.remember_run(job)
                 self.extract(job)
         except Exception as exc:
             with self.lock:
@@ -665,6 +716,27 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
                 count += 1
                 if count >= 1000:
                     break
+
+    def result_summary(self, job):
+        codes = {}
+        observations = 0
+        for line in self.logpath(job).read_text(errors="replace").splitlines():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(row, dict):
+                continue
+            observations += 1
+            code = row.get("status_code", row.get("status-code"))
+            if isinstance(code, int):
+                codes[code] = codes.get(code, 0) + 1
+        states = ", ".join(f"HTTP {code}: {count}" for code, count in sorted(codes.items()))
+        if states:
+            return f"{observations} observations · {states}. Redirects are recorded, not followed."
+        if observations:
+            return f"{observations} structured observations; review output."
+        return "No structured observations emitted; review the log. Exit success does not establish a vulnerability."
 
     def cache_asset(self, job, value, row):
         import hashlib

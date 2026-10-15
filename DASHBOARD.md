@@ -262,3 +262,17 @@ Install the published fork using [INSTALL.md](docs/INSTALL.md). The original sca
 and methodology are by [0xcucumbersalad](https://github.com/0xcucumbersalad) in
 [0xcucumbersalad/hunt](https://github.com/0xcucumbersalad/hunt); the MIT attribution
 is retained. See [TRAFFIC.md](docs/TRAFFIC.md) for pacing and WAF-feedback limits.
+
+### Run history and duplicate protection
+
+A finished job means its process exited with code 0, not that it found a
+vulnerability. The jobs table and log viewer summarize structured observations
+and HTTP statuses. A 301 is a redirect response; its destination is recorded
+without following it. Cloudflare/CDN metadata alone does not establish a block.
+
+The server rejects concurrent duplicate runs for the same engagement, tool,
+normalized target and session revision. Completed runs also require checking
+**Repeat completed run** before another execution. A minimal hashed completion
+marker survives removal of jobs/logs; cached discoveries remain available.
+Changing credentials permits a new authenticated pass. Failed, cancelled or
+interrupted jobs may be retried. Engagement names must be unique (ignoring case).

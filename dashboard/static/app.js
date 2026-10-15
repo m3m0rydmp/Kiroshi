@@ -32,7 +32,7 @@ const when = (s) =>
       })
     : "—";
 const pill = (s) =>
-  `<span class="pill ${esc(s)}">${esc(s.replaceAll("_", " "))}</span>`;
+  `<span class="pill ${esc(s)}">${esc(s === "completed" ? "finished" : s.replaceAll("_", " "))}</span>`;
 const pending = (j) => ["queued", "running", "cancelling"].includes(j.status);
 const toolReady = (t) => t.runnable ?? (t.adapter && t.installed);
 const engagementName = (id) =>
@@ -90,7 +90,7 @@ function jobTable(jobs) {
       "No jobs yet",
       "Create an engagement, preview a command, then queue your first run.",
     );
-  return `<div class="table-wrap"><table><thead><tr><th>Tool / target</th><th>Engagement</th><th>Identity</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>${jobs.map((j) => `<tr><td><strong class="mono">${esc(j.tool)}</strong><div class="sub path">${esc(j.target)}</div></td><td>${esc(engagementName(j.engagement_id))}</td><td>${esc(j.identity || "Anonymous")}</td><td>${pill(j.status)}${j.waiting_for ? `<div class="sub">${j.manual_hold ? "Manual traffic hold" : "Waiting for cooldown"}</div>` : ""}</td><td class="text-muted">${when(j.created)}</td><td><button class="btn small" data-action="log" data-id="${j.id}">Logs ↗</button></td></tr>`).join("")}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>Tool / target</th><th>Engagement</th><th>Identity</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>${jobs.map((j) => `<tr><td><strong class="mono">${esc(j.tool)}</strong><div class="sub path">${esc(j.target)}</div></td><td>${esc(engagementName(j.engagement_id))}</td><td>${esc(j.identity || "Anonymous")}</td><td>${pill(j.status)}${j.result_summary ? `<div class="sub">${esc(j.result_summary)}</div>` : ""}${j.waiting_for ? `<div class="sub">${j.manual_hold ? "Manual traffic hold" : "Waiting for cooldown"}</div>` : ""}</td><td class="text-muted">${when(j.created)}</td><td><button class="btn small" data-action="log" data-id="${j.id}">Logs ↗</button></td></tr>`).join("")}</tbody></table></div>`;
 }
 function overview() {
   const installed = state.tools.filter((t) => t.installed),
@@ -206,7 +206,7 @@ function jobsView() {
   return (
     heading(
       "Jobs & logs",
-      "Bounded local commands. Every run keeps its identity and evidence.",
+      "Finished means the tool exited successfully. Review observations; it does not mean a vulnerability was found.",
       state.engagements.length
         ? '<button class="btn primary" data-action="run">＋ New run</button>'
         : "",
@@ -438,7 +438,7 @@ function runModal(engagementId, target = "") {
   modal(
     "New tool run",
     "Preview a bounded command. Existing recon stays cached.",
-    `<form id="run-form"><div class="form-grid"><div><label>Engagement</label><select name="engagement_id" id="run-engagement">${state.engagements.map((x) => `<option value="${x.id}" ${x.id === e.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></div><div><label>Tool / profile</label><select name="tool" id="run-tool">${ready.map((t) => `<option value="${t.name}" ${t.name === "httpx" ? "selected" : ""}>${esc(t.name)} — ${esc(t.description)}</option>`).join("")}</select></div><div class="full"><label>Target host or URL</label><input name="target" required value="${esc(target || scopeTarget(e))}" placeholder="https://app.example.com"></div><div class="full"><label>Identity / session</label><select name="auth_id" id="run-session"></select><div class="help">HTTP sessions are sent only to their exact origin. DNS/recon/TLS profiles use Anonymous.</div></div></div>${runTrafficFields(e)}<div class="note neutral">Nuclei runs the bundled server-header inventory template. Content discovery uses a small bundled wordlist. Broader templates and wordlists need an adapter extension.</div><div class="preview-box" id="command-preview"></div><div class="inline-error" id="form-error"></div><div class="form-actions"><button type="button" class="btn" data-action="preview">Preview command</button><button class="btn primary" ${ready.length ? "" : "disabled"}>Queue run →</button></div></form>`,
+    `<form id="run-form"><div class="form-grid"><div><label>Engagement</label><select name="engagement_id" id="run-engagement">${state.engagements.map((x) => `<option value="${x.id}" ${x.id === e.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></div><div><label>Tool / profile</label><select name="tool" id="run-tool">${ready.map((t) => `<option value="${t.name}" ${t.name === "httpx" ? "selected" : ""}>${esc(t.name)} — ${esc(t.description)}</option>`).join("")}</select></div><div class="full"><label>Target host or URL</label><input name="target" required value="${esc(target || scopeTarget(e))}" placeholder="https://app.example.com"></div><div class="full"><label>Identity / session</label><select name="auth_id" id="run-session"></select><div class="help">HTTP sessions are sent only to their exact origin. DNS/recon/TLS profiles use Anonymous.</div></div></div>${runTrafficFields(e)}<label class="check-label"><input type="checkbox" name="allow_repeat">Repeat completed run (explicitly rerun this tool, target and session)</label><div class="note neutral">Nuclei runs the bundled server-header inventory template. Content discovery uses a small bundled wordlist. Broader templates and wordlists need an adapter extension.</div><div class="preview-box" id="command-preview"></div><div class="inline-error" id="form-error"></div><div class="form-actions"><button type="button" class="btn" data-action="preview">Preview command</button><button class="btn primary" ${ready.length ? "" : "disabled"}>Queue run →</button></div></form>`,
   );
   updateRunSessions();
 }
@@ -566,7 +566,7 @@ async function updateLog() {
   const { job, output } = await api(`jobs/${id}/log`);
   if (activeLog !== id) return;
   $("#job-meta").innerHTML =
-    `<div class="log-toolbar"><div class="row"><strong class="mono">${esc(job.tool)}</strong>${pill(job.status)}<span class="text-muted">${esc(job.identity || "Anonymous")}</span></div><div class="row"><a class="btn small" href="/api/jobs/${job.id}/download" download>Download</a><button class="btn small" data-action="rerun" data-id="${job.id}">Run again</button>${pending(job) ? `<button class="btn small danger" data-action="cancel-job" data-id="${job.id}">Cancel job</button>` : ""}</div></div><p class="help path">${esc(job.display)}</p><p class="help">${job.error ? esc(job.error) : "Exit code: " + (job.returncode ?? "pending")}</p>${
+    `<div class="log-toolbar"><div class="row"><strong class="mono">${esc(job.tool)}</strong>${pill(job.status)}<span class="text-muted">${esc(job.identity || "Anonymous")}</span></div><div class="row"><a class="btn small" href="/api/jobs/${job.id}/download" download>Download</a><button class="btn small" data-action="rerun" data-id="${job.id}">Run again</button>${pending(job) ? `<button class="btn small danger" data-action="cancel-job" data-id="${job.id}">Cancel job</button>` : ""}</div></div><p class="help path">${esc(job.display)}</p><p class="help">${job.error ? esc(job.error) : "Exit code: " + (job.returncode ?? "pending")}</p><p class="help">${esc(job.result_summary || "")}</p><p class="help">Finished means the process exited successfully; observations still need review. A redirect is not a vulnerability.</p>${
       (job.traffic_events || []).length
         ? `<div class="note neutral">${job.traffic_events
             .map(
@@ -749,6 +749,8 @@ document.addEventListener("click", async (event) => {
 document.addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.target;
+  if (form.dataset.submitting) return;
+  form.dataset.submitting = "true";
   const data = Object.fromEntries(new FormData(form));
   try {
     if (form.getAttribute("id") === "engagement-form") {
@@ -775,6 +777,7 @@ document.addEventListener("submit", async (event) => {
       await api("sessions", data);
       form.reset();
     } else if (form.getAttribute("id") === "run-form") {
+      data.allow_repeat = form.elements.allow_repeat.checked;
       await api("jobs", data);
       view = "jobs";
       selected = data.engagement_id;
@@ -831,6 +834,8 @@ document.addEventListener("submit", async (event) => {
     toast("Saved locally");
   } catch (error) {
     $("#form-error").textContent = error.message;
+  } finally {
+    delete form.dataset.submitting;
   }
 });
 document.addEventListener("change", (event) => {
