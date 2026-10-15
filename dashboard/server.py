@@ -1,6 +1,7 @@
 """Dependency-free, loopback-only dashboard and serialized WSL job runner."""
 import argparse
 import hashlib
+from functools import wraps
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -22,7 +23,7 @@ from .tools import ROOT, CATALOG, allowed, command, discover, rules, target_url
 from .readiness import FIELDS, NOTICE, content_hash, evaluate, normalize_review, related
 from .references import Collector, report_id
 from .http_identity import browser_user_agent
-from .traffic import Feedback, effective, normalize as normalize_traffic, HTTP_TOOLS
+from .traffic import Feedback, effective, normalize as normalize_traffic, HTTP_TOOLS, response_status
 from .config import default_data_dir, database_path
 
 MAX_LOG = 10 * 1024 * 1024
@@ -41,6 +42,23 @@ def bounded(value, default, lo, hi):
     if not lo <= number <= hi:
         raise ValueError(f"Value must be between {lo} and {hi}")
     return number
+
+
+def synchronized(method):
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        with self.lock:
+            return method(self, *args, **kwargs)
+    return call
+
+
+def origin_of(url):
+    parsed = urlsplit(url)
+    name = parsed.hostname
+    authority = f"[{name}]" if ":" in name else name
+    if parsed.port and parsed.port != (443 if parsed.scheme == "https" else 80):
+        authority += f":{parsed.port}"
+    return f"{parsed.scheme}://{authority}"
 
 
 class App:
@@ -135,7 +153,11 @@ class App:
                               user_agent=browser_user_agent(),
                               traffic=normalize_traffic(payload.get("traffic", previous.get("traffic", {}) if previous else {})))
             self.scaffold(engagement)
-            return self.put("engagement", engagement)
+            self.put("engagement", engagement)
+            for finding in self.all("finding"):
+                if finding["engagement_id"] == engagement["id"]:
+                    self.export_finding(finding, engagement)
+            return engagement
 
     def scaffold(self, engagement):
         workspace = self.workspace(engagement)
@@ -200,6 +222,10 @@ no-browser and cleanup instructions. It is not an automatic scan engine.
             path = workspace / filename
             if not path.exists():
                 path.write_text(contents)
+        checklist = workspace / "scope-hosts.md"
+        checked = set(re.findall(r"^- \[x\] (.+)$", checklist.read_text(), re.MULTILINE | re.IGNORECASE))
+        checklist.write_text("# Scope hosts\n\n" + "\n".join(
+            f"- [{'x' if rule in checked else ' '}] {rule}" for rule in engagement["scope"]) + "\n")
         (workspace / "findings").mkdir(exist_ok=True)
         self.quality_workspace(engagement)
 
@@ -258,6 +284,7 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
         return {**finding, "readiness": evaluate(finding, engagement),
                 "related_references": related(finding, self.all("reference"))}
 
+    @synchronized
     def save_finding(self, payload, preview=False):
         engagement = self.get("engagement", payload.get("engagement_id"))
         previous = self.get("finding", payload["id"]) if payload.get("id") else None
@@ -273,6 +300,9 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
                        notes=str(payload.get("notes", ""))[:20000], created=previous["created"] if previous else now(),
                        job_id=previous.get("job_id") if previous else None,
                        review=previous.get("review", {}) if previous else {})
+        for key in ("observed_job_ids", "last_observed"):
+            if previous and key in previous:
+                finding[key] = previous[key]
         if "review" in payload:
             review = normalize_review(payload["review"])
             for key in review["reference_ids"]:
@@ -286,16 +316,22 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
         if status in ("confirmed", "reported") and not readiness["ready"]:
             raise ValueError("Evidence review required before confirmed/reported: " + "; ".join(readiness["gaps"][:4]))
         self.put("finding", finding)
+        self.export_finding(finding, engagement)
+        return self.finding_view(finding)
+
+    def export_finding(self, finding, engagement):
+        title, severity, status = (finding[k] for k in ("title", "severity", "status"))
+        readiness = evaluate(finding, engagement)
         path = self.workspace(engagement) / "findings" / f"{finding['id']}.md"
         body = f"# {title}\n\nSeverity: {severity}\nStatus: {status}\nTarget: {finding['target']}\nReadiness: {readiness['disposition']}\n\n{finding['notes']}\n\n## Evidence review\n"
         for name, label in FIELDS.items():
-            body += f"\n### {label}\n{finding['review'].get(name, '(missing)')}\n"
+            body += f"\n### {label}\n{finding.get('review', {}).get(name, '(missing)')}\n"
         body += "\n## Public reference links\n"
         for reference in related(finding, self.all("reference")):
             body += f"- {reference['source_url']} — {reference['outcome']} (historical; not proof of eligibility)\n"
         path.write_text(body + "\n" + NOTICE + "\n")
-        path.with_suffix(".review.json").write_text(json.dumps(self.finding_view(finding), indent=2))
-        return self.finding_view(finding)
+        snapshot = {**self.finding_view(finding), "evaluated_at": now()}
+        path.with_suffix(".review.json").write_text(json.dumps(snapshot, indent=2))
 
     def import_references(self, payload):
         values = payload.get("urls", [])
@@ -340,14 +376,21 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
         auth = self.get("auth", key)
         url, _, _ = target_url(payload.get("target", ""), engagement)
         parsed = urlsplit(url)
-        if auth["engagement_id"] != engagement["id"] or auth["origin"] != f"{parsed.scheme}://{parsed.netloc}":
+        if auth["engagement_id"] != engagement["id"] or origin_of(auth["origin"]) != origin_of(url):
             raise ValueError("Session must belong to this engagement and match the exact target origin (scheme, host and port)")
         return auth
 
+    @synchronized
     def save_auth(self, payload):
         engagement = self.get("engagement", payload.get("engagement_id"))
         url, _, _ = target_url(payload.get("origin", ""), engagement)
         parsed = urlsplit(url)
+        if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+            raise ValueError("Session binding must be an origin only, without a path, query or fragment")
+        # Validate the raw value too: target_url intentionally strips URL fragments.
+        raw_origin = urlsplit(str(payload.get("origin", "")))
+        if raw_origin.fragment:
+            raise ValueError("Session binding cannot contain a fragment")
         label = str(payload.get("label", "")).strip()[:80]
         if not label:
             raise ValueError("Session label is required")
@@ -383,9 +426,10 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
         file.write_text(json.dumps(headers))
         file.chmod(0o600)
         return self.put("auth", dict(id=key, engagement_id=engagement["id"], label=label,
-                                     origin=f"{parsed.scheme}://{parsed.netloc}",
+                                     origin=origin_of(url),
                                      header_names=list(headers), updated=now(), revision=identifier()))
 
+    @synchronized
     def delete_auth(self, key):
         self.get("auth", key)
         with self.lock:
@@ -412,6 +456,10 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
                 auth_version = auth.get("revision", auth["updated"])
             except ValueError:
                 auth_version = "deleted-session"
+        if payload["tool"] in ("subfinder", "dnsx"):
+            url = name  # These adapters discard scheme, port and path.
+        elif payload["tool"] == "tlsx":
+            url = [name, parsed.port or 443]
         identity = [engagement["id"], payload["tool"], url, auth_id, auth_version]
         return hashlib.sha256(json.dumps(identity, separators=(",", ":")).encode()).hexdigest()
 
@@ -432,6 +480,8 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
             self.put("completed_run", dict(id=key, engagement_id=job["engagement_id"], finished=job.get("finished")))
 
     def enqueue(self, payload):
+        # Session revisions are server-owned; callers may only select a saved session.
+        payload = {k: v for k, v in payload.items() if k != "auth_version"}
         with self.lock:
             if len([j for j in self.all("job") if j["status"] in ("queued", "running", "cancelling")]) >= 20:
                 raise ValueError("Queue full (20 pending jobs)")
@@ -443,9 +493,10 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
             completed = any(j["status"] == "completed" for j in matches) or any(r["id"] == run_key for r in self.all("completed_run"))
             if completed and payload.get("allow_repeat") is not True:
                 raise ValueError("This tool, target and session already finished. Use cached results or explicitly enable Repeat completed run")
+            auth = self.get("auth", preview["auth_id"]) if preview["auth_id"] else None
             job = dict(id=identifier(), engagement_id=payload["engagement_id"], tool=payload["tool"],
                        target=payload["target"], run_key=run_key,
-                       auth_version=(lambda auth: auth.get("revision", auth["updated"]))(self.get("auth", preview["auth_id"])) if preview["auth_id"] else None,
+                       auth_version=auth.get("revision", auth["updated"]) if auth else None,
                        status="queued", created=now(), started=None,
                        finished=None, returncode=None, error=None, **preview)
             if job["auth_id"]:
@@ -507,6 +558,7 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
                                              status_code=event["status_code"], job_id=job["id"], created=now(),
                                              reason=event["reason"]))
 
+    @synchronized
     def clear_traffic_gate(self, payload):
         reason = str(payload.get("reason", "")).strip()[:1000]
         if len(reason) < 10:
@@ -662,7 +714,12 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
                 job["result_summary"] = self.result_summary(job)
                 self.put("job", job)
                 self.remember_run(job)
-                self.extract(job)
+                try:
+                    self.extract(job)
+                except Exception:
+                    # Output processing must not relabel a successful process as failed.
+                    job["processing_error"] = "Output processing was incomplete; inspect the log before using cached results"
+                    self.put("job", job)
         except Exception as exc:
             with self.lock:
                 job = self.get("job", key)
@@ -702,16 +759,34 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
             value = row.get("url") or row.get("host") or row.get("input")
             if not value and isinstance(request, dict):
                 value = request.get("endpoint")
-            response = row.get("response") if isinstance(row.get("response"), dict) else {}
-            status = row.get("status_code", row.get("status", response.get("status_code")))
+            status = response_status(row)
             if value and str(status) not in ("404", "410", "429", "503"):
                 self.cache_asset(job, str(value), row)
-            if job["tool"] == "nuclei" and "template-id" in row:
-                info = row.get("info", {})
-                finding = dict(id=identifier(), engagement_id=job["engagement_id"], job_id=job["id"],
-                               title=info.get("name", row["template-id"]), severity=info.get("severity", "info"),
-                               status="unverified", target=row.get("matched-at", job["target"]),
-                               notes="Scanner observation; review evidence before reporting.", created=now())
+            if job["tool"] == "nuclei" and isinstance(row.get("template-id"), str):
+                target = row.get("matched-at", job["target"])
+                if not isinstance(target, str):
+                    continue
+                engagement = self.get("engagement", job["engagement_id"])
+                try:
+                    target, _, _ = target_url(target, engagement)
+                except ValueError:
+                    continue
+                info = row.get("info") if isinstance(row.get("info"), dict) else {}
+                severity = info.get("severity", "info")
+                if severity not in ("info", "low", "medium", "high", "critical"):
+                    severity = "info"
+                key = hashlib.sha256(json.dumps([engagement["id"], row["template-id"], target,
+                                                row.get("matcher-name", ""), job.get("auth_id")]).encode()).hexdigest()[:24]
+                try:
+                    finding = self.get("finding", key)
+                except ValueError:
+                    finding = dict(id=key, engagement_id=engagement["id"], job_id=job["id"],
+                                   title=str(info.get("name") or row["template-id"])[:200], severity=severity,
+                                   status="unverified", target=target,
+                                   notes="Scanner observation; review evidence before reporting.", created=now())
+                # Keep a reviewed finding intact when scanners observe it again.
+                finding["observed_job_ids"] = list(dict.fromkeys(finding.get("observed_job_ids", [finding["job_id"]]) + [job["id"]]))
+                finding["last_observed"] = now()
                 self.put("finding", finding)
                 count += 1
                 if count >= 1000:
@@ -728,7 +803,7 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
             if not isinstance(row, dict):
                 continue
             observations += 1
-            code = row.get("status_code", row.get("status-code"))
+            code = response_status(row)
             if isinstance(code, int):
                 codes[code] = codes.get(code, 0) + 1
         states = ", ".join(f"HTTP {code}: {count}" for code, count in sorted(codes.items()))

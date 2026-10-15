@@ -195,6 +195,13 @@ def target_url(value, engagement):
     value = str(value).strip()
     if any(c.isspace() or ord(c) < 32 for c in value) or "\\" in value:
         raise ValueError("Invalid target URL")
+    if "://" not in value:
+        try:
+            address = ipaddress.ip_address(value.strip("[]"))
+            if address.version == 6:
+                value = f"[{address}]"
+        except ValueError:
+            pass
     parsed = urlsplit(value if "://" in value else "https://" + value)
     if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username is not None or parsed.password is not None:
         raise ValueError("Use an http(s) URL without credentials")

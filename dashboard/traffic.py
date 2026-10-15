@@ -75,6 +75,17 @@ def retry_after(value, clock=None):
     return max(0, seconds), False
 
 
+def response_status(row):
+    """Status aliases emitted by the supported JSON adapters."""
+    response = row.get("response") if isinstance(row.get("response"), dict) else {}
+    value = row.get("status_code", row.get("status-code", row.get("status", response.get("status_code"))))
+    try:
+        status = int(value)
+    except (TypeError, ValueError):
+        return None
+    return status if 100 <= status <= 599 else None
+
+
 class Feedback:
     def __init__(self, settings):
         self.settings = settings
@@ -90,10 +101,8 @@ class Feedback:
             if not isinstance(row, dict):
                 continue
             response = row.get("response") if isinstance(row.get("response"), dict) else {}
-            status = row.get("status_code", row.get("status", response.get("status_code")))
-            try:
-                status = int(status)
-            except (ValueError, TypeError):
+            status = response_status(row)
+            if status is None:
                 continue
             if status not in self.settings["block_statuses"]:
                 self.consecutive = 0
