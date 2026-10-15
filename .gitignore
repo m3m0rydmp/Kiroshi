@@ -5,3 +5,11 @@
 # */cleanup.md
 
 .DS_Store
+.hunt-data/
+__pycache__/
+*.pyc
+.venv/
+.env
+.env.*
+accounts.md
+secrets/

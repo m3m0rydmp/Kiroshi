@@ -30,6 +30,9 @@ SLUG=$(printf '%s' "$TARGET" \
   | tr '[:upper:]' '[:lower:]' \
   | sed -E -e 's#[/ ]+#-#g' -e 's#[^a-z0-9._-]##g' -e 's#-+#-#g' -e 's#^-##' -e 's#-$##')
 [ -z "$SLUG" ] && { echo "hunt: target slug is empty" >&2; exit 1; }
+case "$SLUG" in
+  .|..) echo "hunt: target must not resolve to . or .." >&2; exit 1 ;;
+esac
 
 OUTDIR="./$SLUG"
 OUT="$OUTDIR/AGENT.md"

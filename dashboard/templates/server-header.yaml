@@ -1,0 +1,22 @@
+id: hunt-server-header
+info:
+  name: HTTP server header inventory
+  author: hunt-dashboard
+  severity: info
+  description: Inventory only. A server header is not a confirmed vulnerability.
+  tags: inventory
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    redirects: false
+    matchers:
+      - type: regex
+        part: header
+        regex:
+          - '(?im)^server:'
+    extractors:
+      - type: regex
+        part: header
+        regex:
+          - '(?im)^server:.*$'

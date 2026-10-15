@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Hunt / Engagement Console</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <a class="brand" href="/"
+        >h<span>▧</span>nt<span class="brand-dot">.</span></a
+      >
+      <div class="edition">AFTERGLOW / 01</div>
+      <div class="workspace-label">
+        WSL WORKSPACE <span class="live-dot"></span>
+      </div>
+      <nav id="nav">
+        <button data-view="overview" class="active">
+          ◫ <span>Overview</span></button
+        ><button data-view="engagements">◎ <span>Engagements</span></button
+        ><button data-view="assets">⌘ <span>Asset cache</span></button
+        ><button data-view="jobs">▤ <span>Jobs & logs</span></button
+        ><button data-view="findings">◇ <span>Findings</span></button
+        ><button data-view="tools">⚒ <span>Toolchain</span></button
+        ><button data-view="agent">↗ <span>Agent handoff</span></button>
+      </nav>
+      <div class="sidebar-footer">
+        <span class="live-dot"></span> Local execution<br /><small
+          >Your tools. Your workspace.</small
+        >
+      </div>
+    </aside>
+    <main>
+      <header>
+        <div class="breadcrumb">
+          WORKSPACE <span>/</span> <b id="crumb">Overview</b>
+        </div>
+        <div class="header-right">
+          <span class="local-tag">● LOCAL ONLY</span
+          ><button id="refresh" class="icon-btn" title="Refresh">↻</button>
+        </div>
+      </header>
+      <div class="content"><div id="page"></div></div>
+    </main>
+    <dialog id="modal"><div id="modal-content"></div></dialog>
+    <div id="toast" role="status"></div>
+    <script src="/app.js"></script>
+  </body>
+</html>

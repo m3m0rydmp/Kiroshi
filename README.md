@@ -1,5 +1,11 @@
 # hunt
 
+> **WSL dashboard extension:** This branch also includes a local web engagement
+> console with scope settings, WSL tool discovery/execution, cached recon,
+> anonymous/session runs, live logs, findings, and Claude Code/Codex handoffs.
+> Run `./hunt-dashboard`, then open `http://localhost:8741`.
+> See [DASHBOARD.md](DASHBOARD.md) for setup, capabilities and current limits.
+
 Scaffold a bug bounty agent workspace in one command. `hunt <target>` creates a
 per-target folder with an `AGENT.md` brief — a ready-to-run operating manual for
 an autonomous, impact-first bug bounty agent (access control, BOLA/IDOR, business

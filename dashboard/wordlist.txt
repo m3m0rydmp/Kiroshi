@@ -1,0 +1,11 @@
+robots.txt
+sitemap.xml
+.well-known/security.txt
+favicon.ico
+api
+login
+status
+health
+docs
+assets
+static
