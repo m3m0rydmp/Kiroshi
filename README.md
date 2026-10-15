@@ -13,7 +13,7 @@ optional tools for deeper analysis; the dashboard and scanning workflows run
 without an AI provider.
 
 [Quick start](#quick-start) · [Tools and workflow](#tools-and-workflow) ·
-[Documentation](#documentation) · [Credits](#credits-and-license)
+[Wiki](https://github.com/m3m0rydmp/Kiroshi/wiki) · [Credits](#credits-and-license)
 
 ## Quick start
 
@@ -58,11 +58,14 @@ See [installation and tool setup](docs/INSTALL.md) for prerequisites and alterna
    stages and limits, then choose **Start workflow & watch live**. Use **Run one
    tool** for an individual check.
 4. **Review discoveries.** Results persist in **Asset cache** and **Jobs & logs**.
+   Search and filter the paginated cache by host, type, source or HTTP status.
    Add an exact-origin cookie/header session when an authenticated pass is needed.
 5. **Verify candidates.** Record reproducible evidence in **Findings**. Public
    reports provide historical context, never proof of eligibility or impact.
-6. **Continue with an agent if useful.** **Agent handoff** prepares shared scope,
-   evidence, and notes for terminal-based Claude Code or Codex sessions.
+6. **Continue with an agent if useful.** **Agent handoff** prepares cached engagement
+   data for review,
+   then runs Claude / your configured provider or Codex analysis in the dashboard.
+   Terminal launch commands and shared notes remain available.
 
 Only test assets for which you have authorization, within the program's rules.
 
@@ -93,8 +96,11 @@ Later stages use scoped discoveries from earlier stages. Identical completed
 checks reuse cached results unless an explicit repeat is requested; the same
 effective check runs at most once within a workflow.
 
-Default workflow bounds are **50 new targets per stage** and **200 total tool
-jobs**, configurable before starting. Missing tools and reached limits are shown
+New workflows default to **unlimited total tool jobs** (blank or `0` in the optional
+total-job limit). Enter a positive number to set a cap. Per-stage target limits are
+also optional and unlimited by default. All eligible candidates remain in a SQLite
+work queue, without a fixed candidate cutoff. There is no overall workflow timer.
+Individual tool timeouts still apply. Missing tools and reached limits are shown
 as limited coverage. Failed or blocked jobs stop the workflow. A restart interrupts
 it rather than automatically resuming network activity.
 
@@ -106,8 +112,9 @@ broad vulnerability templates, exploit findings, or submit reports to HackerOne.
 | Area               | Capabilities                                                                                                     |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------- |
 | Scope and sessions | Host/IP and wildcard rules, URL boundaries, exclusions, exact-origin private cookies and headers                 |
-| Execution          | Workflow previews, duplicate protection, bounded jobs, cancellation, loading indicators and stage progress       |
-| Evidence           | Persistent asset cache, live tool output, lifecycle events, command previews and log downloads                   |
+| Execution          | Ordered workflows, optional limits, checkpoint resume, duplicate protection and live progress                    |
+| Evidence           | Paginated asset search, host grouping, lazy evidence, live tool output and log downloads                         |
+| Agent analysis     | Engagement-specific context, Claude/provider or Codex web analysis, cancellation and saved results               |
 | Review             | Evidence-completeness checks, reviewer attestations and attributed public-report references                      |
 | Notifications      | Discord embeds, Telegram messages, Slack blocks and generic JSON webhooks, with event settings and test delivery |
 | Performance        | Backend memory/CPU snapshots, sampled scanner resource usage and a repeatable local benchmark                    |
@@ -138,28 +145,22 @@ multi-user isolation. Custom data directories should live outside the checkout.
 
 ## Documentation
 
-| Guide                                         | Contents                                                                 |
-| --------------------------------------------- | ------------------------------------------------------------------------ |
-| [Installation](docs/INSTALL.md)               | WSL/Linux setup, missing-tool installation, detection and path overrides |
-| [Dashboard usage](DASHBOARD.md)               | Engagements, workflows, sessions, findings and agent handoffs            |
-| [Traffic controls](docs/TRAFFIC.md)           | Rate limits, cooldowns and adapter-specific support                      |
-| [Notifications](docs/NOTIFICATIONS.md)        | Webhook formats, Telegram chat IDs, event settings and secret storage    |
-| [Performance](docs/PERFORMANCE.md)            | Resource metrics, benchmark procedure and measured results               |
-| [Business logic review](docs/LOGIC_REVIEW.md) | Reviewed workflows, corrected issues and remaining boundaries            |
-| [Scaffold CLI](docs/SCAFFOLD.md)              | The retained upstream script and its commands                            |
+Read the **[GitHub Wiki](https://github.com/m3m0rydmp/Kiroshi/wiki)** for installation,
+usage and troubleshooting. Versioned copies remain available below for offline use
+and reviewing documentation changes alongside code.
 
-## Verification
+| Guide                                       | Wiki                                                                                     | Versioned source                          |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------- | ----------------------------------------- |
+| Installation and tool detection             | [Installation](https://github.com/m3m0rydmp/Kiroshi/wiki/Installation)                   | [INSTALL.md](docs/INSTALL.md)             |
+| Workflows, asset cache and agent analysis   | [Dashboard](https://github.com/m3m0rydmp/Kiroshi/wiki/Dashboard)                         | [DASHBOARD.md](DASHBOARD.md)              |
+| Traffic controls and WAF feedback           | [Traffic controls](https://github.com/m3m0rydmp/Kiroshi/wiki/Traffic-controls)           | [TRAFFIC.md](docs/TRAFFIC.md)             |
+| Webhook setup and test notifications        | [Notifications](https://github.com/m3m0rydmp/Kiroshi/wiki/Notifications)                 | [NOTIFICATIONS.md](docs/NOTIFICATIONS.md) |
+| Resource metrics and benchmarks             | [Performance](https://github.com/m3m0rydmp/Kiroshi/wiki/Performance)                     | [PERFORMANCE.md](docs/PERFORMANCE.md)     |
+| Corrected behavior and remaining boundaries | [Business logic review](https://github.com/m3m0rydmp/Kiroshi/wiki/Business-logic-review) | [LOGIC_REVIEW.md](docs/LOGIC_REVIEW.md)   |
+| Original scaffold CLI                       | [Scaffold CLI](https://github.com/m3m0rydmp/Kiroshi/wiki/Scaffold-CLI)                   | [SCAFFOLD.md](docs/SCAFFOLD.md)           |
 
-```bash
-./kiroshi doctor --require-tools
-python3 -m unittest discover -s tests -v
-node tests/browser_check.mjs
-python3 -m tests.performance_check --output /tmp/kiroshi-performance.json
-```
-
-Browser checks require Node.js and a compatible Chrome installation; neither is
-needed to use the dashboard. Browser and performance fixtures use temporary local
-data. Additional loopback integration checks are documented in [DASHBOARD.md](DASHBOARD.md).
+Verification commands and fixture requirements are in the usage and performance
+guides. Maintainers can regenerate the Wiki using [the publishing guide](docs/WIKI.md).
 
 ## Credits and license
 

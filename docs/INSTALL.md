@@ -7,7 +7,7 @@ and macOS launchers are not supported. The Windows browser can connect to the WS
 service through localhost forwarding. No Docker container is needed: the native
 runner intentionally uses the Linux tools installed on that machine.
 
-Required: Python 3.10 or newer, Bash, GNU coreutils (`readlink`, `date`, `tr`), `sed`
+Required: Python 3.10 or newer with SQLite JSON functions, Bash, GNU coreutils (`readlink`, `date`, `tr`), `sed`
 and Git for clone/update. On Debian/Ubuntu-based systems, if these are missing:
 
 ```bash
@@ -146,6 +146,27 @@ Your tool configurations are isolated per job; external provider keys, proxy set
 and templates are not implicitly inherited. Subfinder's existing provider-key file is
 not loaded by this version. No program-specific tool installation is downloaded on demand.
 
+## Optional agent setup
+
+Scanner installation does not install Claude Code or Codex. Install your chosen CLI
+separately, configure its provider credentials locally, then confirm that `claude
+--help` or `codex exec --help` works from the Linux terminal used to start Kiroshi.
+The Toolchain page detects these clients; **Agent handoff** provides their web
+analysis flow. Neither client is needed for recon or enumeration.
+
+For Claude routed to DeepSeek or another compatible provider, web analysis reads
+`ANTHROPIC_*` environment values from the server process and the `env` section of
+`~/.claude/settings.json`. It does not import project hooks or MCP settings. Bare
+mode requires provider/API credentials; interactive OAuth-only authentication may
+need separate API configuration. Do not put credentials in this checkout.
+
+Codex uses its existing CLI authentication. Web analysis deliberately ignores its
+user runtime configuration and requires support for `--ignore-user-config`,
+`--ignore-rules`, and `--ephemeral`. CLI options vary across releases; an unsupported
+option or authentication failure is shown in the analysis result. See
+[dashboard agent usage](../DASHBOARD.md#claude-code--deepseek-and-codex) for context
+preparation, privacy limits and cancellation.
+
 ## Update and back up
 
 Stop the server before updating or backing up. From the checkout, on the branch you
@@ -161,6 +182,11 @@ Back up the selected data directory separately. `.kiroshi-data/` contains creden
 machine-local paths and evidence and is ignored by Git; do not publish it. Put any
 custom data directory outside the checkout. Tool versions and absolute paths in
 old job records are historical evidence, not portable installation settings.
+
+The next startup adds the asset summary index and SQLite workflow target queue
+automatically. Evidence records and engagement IDs are preserved. Existing workflows
+keep their saved limits; newly previewed workflows default to unlimited total jobs
+and unlimited targets per stage. Restarting never resumes scanning automatically.
 
 For the original scaffold-only CLI, see [SCAFFOLD.md](SCAFFOLD.md).
 

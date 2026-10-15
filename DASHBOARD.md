@@ -38,8 +38,10 @@ The process binds to IPv4 loopback only. Stop it with Ctrl+C.
    adapters require whole-host authorization and refuse hosts with URL exclusions;
    URL-only rules can be saved but cannot be scanned yet. CIDR and mobile-app
    rules remain unsupported. Do not broaden scope to bypass an adapter limitation.
-2. Choose a ready tool, enter an authorized target, preview, then queue an anonymous
-   run. Nothing runs just because you entered a domain or created an engagement.
+2. Choose **Run engagement workflow**, preview the ordered stages, and start an
+   anonymous workflow. Total jobs and targets per stage are unlimited by default;
+   enter optional caps if needed. **Run one tool** queues just the selected tool
+   and target. Nothing runs merely from creating an engagement.
 3. Results remain in the local cache and per-run logs across browser/server restarts.
    The normalized cache includes supported JSON URL/host observations and scoped
    Subfinder names. All runs retain capped text logs even when normalization finds
@@ -72,23 +74,24 @@ not install, update, or automatically execute discovered tools.
 
 Nine adapters:
 
-| Tool | Initial runnable profile |
-|---|---|
-| Subfinder | Passive discovery for a selected in-scope seed hostname |
-| dnsx | A / AAAA / CNAME inventory |
-| URLFinder | Scoped passive URL discovery from public sources |
-| httpx | Selected-scheme status/title/technology inventory, no redirects |
-| tlsx | Certificate / TLS inventory on selected port or 443 |
-| Katana | Non-headless, depth-two crawl confined to the selected origin |
-| Feroxbuster | Non-recursive GET discovery, small bundled wordlist |
-| ffuf | GET path discovery, small bundled wordlist |
-| Nuclei | Bundled server-header inventory template only |
+| Tool        | Initial runnable profile                                        |
+| ----------- | --------------------------------------------------------------- |
+| Subfinder   | Passive discovery for a selected in-scope seed hostname         |
+| dnsx        | A / AAAA / CNAME inventory                                      |
+| URLFinder   | Scoped passive URL discovery from public sources                |
+| httpx       | Selected-scheme status/title/technology inventory, no redirects |
+| tlsx        | Certificate / TLS inventory on selected port or 443             |
+| Katana      | Non-headless, depth-two crawl confined to the selected origin   |
+| Feroxbuster | Non-recursive GET discovery, small bundled wordlist             |
+| ffuf        | GET path discovery, small bundled wordlist                      |
+| Nuclei      | Bundled server-header inventory template only                   |
 
 Other entries are **inventory-only**, including Amass, Findomain, assetfinder, Chaos,
 gau, waybackurls, puredns, shuffledns, dnsgen, alterx, Naabu, Nmap, Arjun,
 ParamSpider, Dalfox, sqlmap, crlfuzz, Interactsh, Gitleaks, TruffleHog, jq, anew, uro,
-unfurl, Notify, Claude Code, and Codex. They need a reviewed adapter before dashboard
-execution. There is no arbitrary shell-command input.
+unfurl and Notify. They need a reviewed scan adapter before workflow execution.
+Claude Code and Codex are separate optional analysis clients, launched through
+**Agent handoff**, rather than scanning adapters. There is no arbitrary shell-command input.
 
 Add executable metadata and a bounded argv builder in `dashboard/tools.py`, then
 exercise it against a local fixture. Add a normalizer where useful. Confirm flags
@@ -115,7 +118,7 @@ responses, partial/reflected tokens, URLs, and derived secrets may still be sens
 Treat the entire data directory as private and review evidence before sharing it.
 
 HTTP sessions are bound to an exact scheme, hostname and explicit port; equivalent
-implicit/explicit default ports should be entered consistently. Redirects are
+implicit/explicit default ports are treated as equivalent. Redirects are
 disabled. Katana is confined to the selected origin, and Feroxbuster cannot recurse
 or extract further links. Host routing/framing headers cannot be overridden.
 
@@ -129,17 +132,85 @@ The server rejects unrecognized Host headers, cross-site requests, and cross-ori
 mutations. Writes require a per-process request token. It is a single-user local
 service, without login, TLS or multi-user isolation; other local processes are trusted.
 
+## Resuming a stopped workflow
+
+After fixing a failed tool, use **Resume workflow** in the workflow list or live
+workflow dialog. Kiroshi retains the same workflow and completed stages, retries the
+stopped target, then continues in order. Failed attempts and their logs remain in
+history. Resume uses the original job and per-stage limits; retry attempts count
+against them. It does not clear rate-limit cooldowns or manual traffic holds.
+
+Scope, engagement settings and session revisions must still match the saved checkpoint.
+If they changed, or the original limits are exhausted, preview a new workflow instead.
+A second active workflow for the engagement prevents resume. Resume is explicit;
+restarting the dashboard does not automatically send target requests.
+
+## Large asset caches
+
+The cache keeps discoveries across runs and session changes. Clearing job history does
+not delete discoveries or make them invalid. Large caches are organized in a separate
+SQLite summary index by engagement, host, asset type, source and observed HTTP status.
+The underlying evidence records and existing asset IDs remain unchanged. Repeated
+observations of the same engagement/value update the existing record.
+
+**Asset cache** loads 50 summaries per page by default, with 25/50/100/200-row options.
+Search covers the full cache and is debounced while typing. Filter by engagement,
+host, type, source or HTTP status; **Group by host** orders related endpoints together.
+The host dropdown shows the largest 100 groups; search covers the remaining groups.
+**Evidence** loads a single stored record on demand, with a bounded text preview.
+HTTP statuses are observations from prior scans, not a current liveness guarantee.
+Use **Refresh** for new results without losing your current filters.
+
+The general dashboard state response includes total counts and ten lightweight asset
+summaries instead of the entire cache. Workflows and agent handoffs continue to read
+the underlying cache independently of the browser's current page. Existing databases
+receive the summary index automatically; rebuilding it does not remove evidence.
+
+Kiroshi currently runs directly in WSL. Docker is optional packaging, not a remedy for
+loading thousands of browser rows. Keeping the runner in WSL preserves access to local
+tool installations. A future containerized deployment should either install its tools
+inside the image or use an explicitly designed WSL worker; Docker's WSL integration
+does not automatically execute binaries in your Linux distribution.
+
 ## Claude Code / DeepSeek and Codex
 
-Open **Agent handoff**, save your current position and copy the terminal command.
-The engagement has `AGENTS.md`, `CLAUDE.md`, `scope.json`, and persistent state files.
-Your configured Claude Code endpoint/model or Codex credentials remain managed by
-the respective CLI. The dashboard itself does not send requests to model providers.
+Open **Agent handoff** and choose an engagement and provider. Click **Prepare context**
+to gather its cached assets, job outcomes, workflow coverage and findings with readiness
+gaps. Expand **Context sent to the agent** and review the data, then click **Analyze
+gathered data**. The selected local CLI sends this context to its model provider;
+the dashboard shows running status, received output bytes, cancellation and the final
+answer. Reloading the page retains the latest analysis. No provider request is made
+by preparing context alone.
 
-Agent execution is **terminal-based** in this version; the web UI does not launch
-an unattended agent or stream its conversation. Saved dashboard sessions are not
-automatically injected into agent processes. Only one agent should act on the
-engagement at a time. Use the handoff rather than relying on cross-provider chat history.
+Analysis is limited to five minutes and 256 KiB of output, with one analysis process
+at a time. It does not start scans, alter findings or submit reports. Shell execution,
+web search and inherited MCP integrations are disabled for Codex, which uses a read-only
+sandbox. Claude runs with its built-in tools, MCP integrations, hooks and skills disabled.
+These are trusted local CLI processes, not separate containers. CLI errors, timeouts
+and interruptions are shown explicitly; server restarts do not replay requests.
+
+Claude uses `ANTHROPIC_*` environment values, including endpoint, model and credentials,
+from the dashboard process or `~/.claude/settings.json` (`env` only). This supports
+Claude configured for DeepSeek without importing hooks or project settings. Bare mode
+requires API/provider credentials; interactive OAuth/keychain-only Claude setups may
+need API credentials. Codex reuses its CLI authentication while ignoring user runtime
+configuration for bounded analysis. Your installed Codex must support
+`--ignore-user-config`, `--ignore-rules` and `--ephemeral`; update the CLI if it rejects
+these options. No permission bypass flags are used.
+
+The context excludes raw logs, HTTP headers, request/response bodies, session values,
+URL queries/fragments and free-text notes. Known saved session values are redacted.
+Paths and scanner observations can still contain sensitive data: review the preview
+before sending it to any provider. Context includes at most 500 assets, 200 recent jobs,
+20 workflows and 100 findings, within a 180,000-character limit. Included and total
+counts make omissions visible. A changed dataset requires preparing a fresh context.
+Results cite evidence IDs and identify missing proof; analysis is not live verification
+or a prediction of program acceptance.
+
+**Shared handoff** notes and **Launch locally** remain available for interactive work.
+The workspace contains `AGENTS.md`, `CLAUDE.md`, `scope.json` and the prepared
+`gathered-data.json` snapshot. Dashboard sessions are not injected into agent processes.
+Stop any separate terminal agent before starting another agent on the engagement.
 
 ## Report readiness and public report references
 
@@ -229,10 +300,11 @@ All runtime state is under `.kiroshi-data/` by default (ignored by Git):
 
 ```text
 .kiroshi-data/
-  kiroshi.sqlite3             # engagements, job metadata, cached assets, triage
-  secrets/                 # private saved session values
-  jobs/<job-id>/output.log # persistent capped evidence, one log per run
-  engagements/<id>/        # agent-ready workspace and original scaffold brief
+  kiroshi.sqlite3          # records, asset summary index and workflow target queue
+  secrets/                # private session values and webhook configuration
+  jobs/<job-id>/output.log # capped evidence, retained until explicitly erased
+  analyses/<id>/          # temporary CLI analysis working directories
+  engagements/<id>/       # shared instructions, notes and prepared data snapshot
 ```
 
 Back up the directory while the server is stopped. It includes sensitive evidence
@@ -254,8 +326,9 @@ node tests/browser_check.mjs
 
 The integration suites open local sockets and test anonymous/session runs, retained
 cache, request-token protection, Host validation, and cross-host redirect rejection.
-The Chrome smoke test checks engagement/session forms, masked previews, handoff edits,
-tool filtering, and mobile layout. No public targets are scanned.
+The Chrome smoke test checks engagement/session forms, command previews, web agent
+analysis with a fake provider, paginated asset search and evidence, workflow startup
+and resume, live logs, history erasure, notifications, and mobile layout. No public targets are scanned.
 
 ## Distribution and credits
 
@@ -277,7 +350,6 @@ normalized target and session revision. Completed runs also require checking
 marker survives removal of jobs/logs; cached discoveries remain available.
 Changing credentials permits a new authenticated pass. Failed, cancelled or
 interrupted jobs may be retried. Engagement names must be unique (ignoring case).
-
 
 ## Sequential engagement workflows and live execution
 
@@ -301,13 +373,25 @@ Wildcard base domains may seed passive Subfinder/URLFinder collection without
 being authorized for active apex probes. Active targets still need explicit host
 scope. Every discovered URL is filtered against current scope/exclusions.
 
-The default limits are 50 new tool targets per stage and 200 total jobs; preview
-and edit these before starting. Each job inherits the engagement's rate,
-concurrency, timeout and duration ceiling. Candidate lists are capped at 2000
-entries. Missing tools and limits produce **completed limited**, with skipped
+New workflows default to unlimited total tool jobs. Leave **Total tool-job limit**
+blank or enter `0` for unlimited, or enter a positive whole number for an explicit cap.
+Existing workflows retain their saved limits. Per-stage target limits are also
+optional and unlimited by default (blank or `0`). Enter a positive number only when
+you want to limit stage coverage. Each job inherits the engagement's rate,
+concurrency, timeout and duration ceiling. Pending candidates are stored in SQLite
+rather than a large array inside the workflow record. There is no fixed candidate
+cutoff or overall workflow runtime limit. Missing tools and limits produce
+**completed limited**, with skipped
 stages/targets visible. Failed, blocked, timed-out or incompletely processed jobs
 stop the workflow. Traffic holds continue to apply. Server restart interrupts a
 workflow and never resumes network activity automatically.
+
+Long workflows continue while their tools run and the server remains active. A
+workflow is not stopped merely because it takes hours. Individual tool timeouts and
+maximum job durations still follow the engagement settings; rate limits, scope checks,
+traffic holds and cancellation still apply. Those controls remain visible separately
+from the optional overall and per-stage counts. A timeout is reported as a stopped job,
+not a successful scan. Agent analysis runs independently with its own displayed limit.
 
 Identical tool/target/session checks reuse existing completion markers and cache.
 The repeat checkbox permits a fresh pass over earlier runs, while each effective
@@ -332,7 +416,6 @@ identity and pacing settings rather than silently selecting httpx again.
 Subfinder and URLFinder manage their own browser-style user agents for passive
 source queries. Other HTTP adapters use Kiroshi's configured browser identity.
 Passive provider configurations remain isolated from the user's normal home.
-
 
 ## Erasing history and loading feedback
 

@@ -278,7 +278,9 @@ def command(engagement, payload, tools):
             args += ["-delay", f"{traffic['delay_ms']}ms"]
     elif tool == "tlsx":
         delay = max(1 / traffic["rate"], traffic["delay_ms"] / 1000)
-        args = [exe, "-u", name, "-p", str(port or 443), *common, "-j", "-san", "-cn", "-tv", "-c", "1", "-retry", "0", "-timeout", timeout, "-delay", f"{delay:.3f}s"]
+        # JSON already contains subject_cn/subject_an. SAN/CN output filters
+        # cannot be combined with TLS probes in current tlsx releases.
+        args = [exe, "-u", name, "-p", str(port or 443), *common, "-j", "-tv", "-c", "1", "-retry", "0", "-timeout", timeout, "-delay", f"{delay:.3f}s"]
     elif tool == "katana":
         # Crawl only the selected origin, even if engagement scope is broader.
         parsed = urlsplit(url)

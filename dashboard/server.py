@@ -17,7 +17,7 @@ import sqlite3
 import subprocess
 import threading
 import time
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qs
 import uuid
 
 from .tools import ROOT, CATALOG, allowed, command, discover, rules, target_url, resolve_target
@@ -29,6 +29,8 @@ from .config import default_data_dir, database_path
 from .workflows import WorkflowMixin, ACTIVE as ACTIVE_WORKFLOWS
 from .notifications import Notifications
 from .performance import dashboard_metrics, ProcessMonitor
+from .agents import Agents
+from .assets import AssetMixin
 
 MAX_LOG = 10 * 1024 * 1024
 
@@ -65,14 +67,18 @@ def origin_of(url):
     return f"{parsed.scheme}://{authority}"
 
 
-class App(WorkflowMixin):
+class App(WorkflowMixin, AssetMixin):
     def __init__(self, data):
         self.data = Path(data).resolve()
         self.data.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.lock = threading.RLock()
         self.db = sqlite3.connect(database_path(self.data), check_same_thread=False)
         self.db.execute("CREATE TABLE IF NOT EXISTS records (kind TEXT, id TEXT, body TEXT, PRIMARY KEY(kind,id))")
+        self.db.execute("CREATE INDEX IF NOT EXISTS jobs_run_key ON records(json_extract(body,'$.run_key')) WHERE kind='job'")
+        self.db.execute("CREATE INDEX IF NOT EXISTS jobs_status ON records(json_extract(body,'$.status')) WHERE kind='job'")
+        self.db.execute("CREATE TABLE IF NOT EXISTS workflow_targets (workflow_id TEXT,stage_index INTEGER,position INTEGER,target TEXT,PRIMARY KEY(workflow_id,stage_index,position))")
         self.db.commit()
+        self.initialize_assets()
         self.token = secrets.token_urlsafe(32)
         self.jobs = queue.Queue()
         self.stop = threading.Event()
@@ -82,6 +88,7 @@ class App(WorkflowMixin):
         self.notifications = Notifications(self.data)
         self.collector = Collector()
         self.tool_cache = None
+        self.agents = Agents(self)
         for job in self.all("job"):
             if job["status"] in ("queued", "running", "cancelling"):
                 job.update(status="interrupted", finished=now(), error="Server restarted; review output before rerunning")
@@ -112,6 +119,8 @@ class App(WorkflowMixin):
     def put(self, kind, value):
         with self.lock:
             self.db.execute("INSERT OR REPLACE INTO records VALUES (?,?,?)", (kind, value["id"], json.dumps(value)))
+            if kind == "asset":
+                self.index_asset(value)
             self.db.commit()
         return value
 
@@ -124,7 +133,7 @@ class App(WorkflowMixin):
         completed = record["status"] in ("completed", "completed_limited")
         event = f"{kind}_{'completed' if completed else 'stopped'}"
         engagement = self.get("engagement", record["engagement_id"])
-        body = dict(id=f"{kind}:{record['id']}:{record['status']}", event=event,
+        body = dict(id=f"{kind}:{record['id']}:{record['status']}:{record.get('resume_count', 0)}", event=event,
                     title=f"{kind.title()} {'finished' if completed else 'stopped'}", engagement=engagement["name"], status=record["status"],
                     summary="Execution ended; review observations and scope coverage before reporting.")
         if kind == "workflow":
@@ -219,6 +228,8 @@ Stop on unclear scope, exhausted budgets, or a blocked dependency. Record a hand
 
 ## Workflow
 Read handoff.md, features.md, todo.md and cleanup.md at session start.
+If gathered-data.json exists, parse it first for cached observations, failed coverage
+and evidence IDs. It is a bounded snapshot, not proof or permission to expand scope.
 Use two owned test identities for access-control checks. Record metadata in accounts.md;
 keep credentials outside tracked files. Prove minimum necessary impact on owned test objects.
 Log mutations and their undo steps. Never delete evidence or audit logs as cleanup.
@@ -514,18 +525,31 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
             # Minimal duplicate marker survives log deletion; no output or credentials.
             self.put("completed_run", dict(id=key, engagement_id=job["engagement_id"], finished=job.get("finished")))
 
+    def has_completed_run(self, run_key):
+        with self.lock:
+            return self.db.execute("SELECT 1 FROM records WHERE kind='completed_run' AND id=?", (run_key,)).fetchone() is not None
+
+    def matching_jobs(self, run_key):
+        with self.lock:
+            rows = self.db.execute("SELECT body FROM records WHERE kind='job' AND (json_extract(body,'$.run_key')=? OR json_extract(body,'$.run_key') IS NULL)", (run_key,)).fetchall()
+        return [job for (body,) in rows if self.historical_run_key(job := json.loads(body)) == run_key]
+
+    def pending_job_count(self):
+        with self.lock:
+            return self.db.execute("SELECT count(*) FROM records WHERE kind='job' AND json_extract(body,'$.status') IN ('queued','running','cancelling')").fetchone()[0]
+
     def enqueue(self, payload):
         # Session revisions are server-owned; callers may only select a saved session.
         payload = {k: v for k, v in payload.items() if k != "auth_version"}
         with self.lock:
-            if len([j for j in self.all("job") if j["status"] in ("queued", "running", "cancelling")]) >= 20:
+            if self.pending_job_count() >= 20:
                 raise ValueError("Queue full (20 pending jobs)")
             preview = self.preview(payload)
             run_key = self.run_key(payload)
-            matches = [j for j in self.all("job") if self.historical_run_key(j) == run_key]
+            matches = self.matching_jobs(run_key)
             if any(j["status"] in ("queued", "running", "cancelling") for j in matches):
                 raise ValueError("This tool, target and session already has a pending run")
-            completed = any(j["status"] == "completed" for j in matches) or any(r["id"] == run_key for r in self.all("completed_run"))
+            completed = any(j["status"] == "completed" for j in matches) or self.has_completed_run(run_key)
             if completed and payload.get("allow_repeat") is not True:
                 raise ValueError("This tool, target and session already finished. Use cached results or explicitly enable Repeat completed run")
             auth = self.get("auth", preview["auth_id"]) if preview["auth_id"] else None
@@ -595,6 +619,7 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
                 shutil.rmtree(directory)
         self.db.executemany("DELETE FROM records WHERE kind='job' AND id=?", [(j["id"],) for j in jobs])
         self.db.executemany("DELETE FROM records WHERE kind='workflow' AND id=?", [(w["id"],) for w in workflows])
+        self.db.executemany("DELETE FROM workflow_targets WHERE workflow_id=?", [(w["id"],) for w in workflows])
         self.db.commit()
         return dict(ok=True, jobs_deleted=len(jobs), workflows_deleted=len(workflows))
 
@@ -946,11 +971,13 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
         engagement = self.get("engagement", key)
         workspace = self.workspace(engagement)
         return dict(workspace=str(workspace), provider=engagement["provider"],
-                    command=f"cd {shlex.quote(str(workspace))} && {engagement['provider']}",
-                    handoff=(workspace / "handoff.md").read_text()[:50000])
+                    command=f"cd {shlex.quote(str(workspace))} && {engagement['provider']} " + shlex.quote("Read AGENTS.md, QUALITY.md and handoff.md. If gathered-data.json exists, parse its cached observations and coverage gaps first; cite evidence IDs and distinguish hypotheses from demonstrated vulnerabilities."),
+                    handoff=(workspace / "handoff.md").read_text()[:50000],
+                    analyses=[a for a in self.all("analysis") if a["engagement_id"] == key][:1])
 
     def shutdown(self):
         self.stop.set()
+        self.agents.close()
         with self.lock:
             if self.process:
                 self.kill(self.process)
@@ -1004,19 +1031,25 @@ class Handler(BaseHTTPRequestHandler):
             self.check_request()
             path = urlsplit(self.path).path
             if path == "/api/state":
+                assets = self.app.asset_overview()
                 return self.respond(dict(token=self.app.token, engagements=self.app.all("engagement"),
                                          notifications=self.app.notifications.public(), performance=self.app.performance(), jobs=[self.app.job_view(j) for j in self.app.all("job")], workflows=[self.app.workflow_view(w) for w in self.app.all("workflow")], findings=[self.app.finding_view(f) for f in self.app.all("finding")],
                                          tools=self.app.tools(), sessions=self.app.all("auth"),
-                                         assets=self.app.all("asset"), data_dir=str(self.app.data),
+                                         assets=assets["preview"], asset_counts={"total": assets["total"], "by_engagement": assets["by_engagement"]}, data_dir=str(self.app.data),
                                          traffic_gates=[g for g in self.app.all("traffic_gate") if g.get("manual_hold") or g.get("until", 0) > time.time()],
                                          references=self.app.all("reference"), review_fields=FIELDS,
                                          reference_search_enabled=self.app.collector.configured(),
                                          http_user_agent=browser_user_agent()))
+            if path == "/api/assets":
+                params = {k: v[-1] for k, v in parse_qs(urlsplit(self.path).query).items()}
+                return self.respond(self.app.asset_page(params))
             if path == "/api/performance":
                 return self.respond(self.app.performance())
             if path == "/api/notifications":
                 return self.respond(self.app.notifications.public())
             parts = path.strip("/").split("/")
+            if len(parts) == 3 and parts[:2] == ["api", "assets"]:
+                return self.respond(self.app.get("asset", parts[2]))
             if len(parts) == 4 and parts[:2] == ["api", "jobs"] and parts[3] in ("log", "download"):
                 job = self.app.get("job", parts[2])
                 file = self.app.logpath(job)
@@ -1034,6 +1067,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(self.app.workflow_view(workflow))
             if len(parts) == 3 and parts[:2] == ["api", "agent"]:
                 return self.respond(self.app.agent(parts[2]))
+            if len(parts) == 3 and parts[:2] == ["api", "analyses"]:
+                return self.respond(self.app.get("analysis", parts[2]))
             static = {"/": ("index.html", "text/html; charset=utf-8"),
                       "/app.js": ("app.js", "application/javascript; charset=utf-8"),
                       "/style.css": ("style.css", "text/css; charset=utf-8")}
@@ -1068,6 +1103,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(self.app.workflow_view(self.app.start_workflow(payload)), 201)
             if path == "/api/workflows/cancel":
                 return self.respond(self.app.cancel_workflow(payload.get("id")))
+            if path == "/api/workflows/resume":
+                return self.respond(self.app.workflow_view(self.app.resume_workflow(payload.get("id"))))
             if path == "/api/jobs/preview":
                 return self.respond(self.app.preview(payload))
             if path == "/api/sessions":
@@ -1099,6 +1136,12 @@ class Handler(BaseHTTPRequestHandler):
                 text = str(payload.get("text", ""))[:50000]
                 (self.app.workspace(engagement) / "handoff.md").write_text(text)
                 return self.respond({"ok": True})
+            if path == "/api/agent/prepare":
+                return self.respond(self.app.agents.prepare(payload.get("engagement_id")))
+            if path == "/api/agent/analyze":
+                return self.respond(self.app.agents.start(payload))
+            if path == "/api/agent/cancel":
+                return self.respond(self.app.agents.cancel(payload.get("id")))
             if path == "/api/references/import":
                 return self.respond(self.app.import_references(payload))
             if path == "/api/references/discover":

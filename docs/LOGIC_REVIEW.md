@@ -7,19 +7,19 @@ browser fixtures and loopback HTTP services. No engagement scans are required.
 
 ## Corrected workflows
 
-| Issue | Result after correction |
-|---|---|
-| A caller-supplied session revision could change a duplicate-run key. | Enqueue derives the revision from the saved session and ignores caller revisions. |
-| DNS and TLS adapters discarded URL components that still changed their duplicate keys. | Keys use the adapter's effective host or host/port target. |
-| Default HTTPS/HTTP ports could cause equivalent session origins to mismatch. | Origin comparison normalizes default ports and IPv6 authorities; different schemes and non-default ports remain separate. |
-| Session URLs silently lost paths, queries or fragments. | Only origin URLs, optionally ending in `/`, can be saved as session bindings. |
-| Session replacement/deletion and finding review could interleave with enqueue or scope changes. | These mutations use the same application lock as enqueue and engagement edits. Session snapshots and their recorded revisions stay consistent. |
-| Scanner status spelling differences bypassed block feedback or cache filtering. | Feedback, cache extraction and summaries share status parsing for supported JSON aliases. |
+| Issue                                                                                                                           | Result after correction                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A caller-supplied session revision could change a duplicate-run key.                                                            | Enqueue derives the revision from the saved session and ignores caller revisions.                                                                                                          |
+| DNS and TLS adapters discarded URL components that still changed their duplicate keys.                                          | Keys use the adapter's effective host or host/port target.                                                                                                                                 |
+| Default HTTPS/HTTP ports could cause equivalent session origins to mismatch.                                                    | Origin comparison normalizes default ports and IPv6 authorities; different schemes and non-default ports remain separate.                                                                  |
+| Session URLs silently lost paths, queries or fragments.                                                                         | Only origin URLs, optionally ending in `/`, can be saved as session bindings.                                                                                                              |
+| Session replacement/deletion and finding review could interleave with enqueue or scope changes.                                 | These mutations use the same application lock as enqueue and engagement edits. Session snapshots and their recorded revisions stay consistent.                                             |
+| Scanner status spelling differences bypassed block feedback or cache filtering.                                                 | Feedback, cache extraction and summaries share status parsing for supported JSON aliases.                                                                                                  |
 | Repeated Nuclei observations created duplicate findings; out-of-scope and malformed observations could enter the findings list. | Scanner finding IDs bind engagement, template, target, matcher and session. Targets are scope checked, metadata is normalized, and repeat observations retain human review and provenance. |
-| Output-processing failures could change a successful tool execution into a failed job after its completion marker was stored. | Process outcome remains intact; incomplete output processing gets a separate warning. |
-| Editing scope left the generated scope checklist stale. | The checklist is regenerated, retaining checkmarks for unchanged rules. Handoff and feature coverage remain intact. |
-| Policy/scope edits invalidated live readiness but left exported finding reviews marked ready. | Edits regenerate finding exports against current scope/policy. JSON exports include their evaluation timestamp. Recorded historical finding status is preserved. |
-| Bare IPv6 scope addresses could not be used as targets. | Bare IPv6 addresses normalize to bracketed URL authorities. |
+| Output-processing failures could change a successful tool execution into a failed job after its completion marker was stored.   | Process outcome remains intact; incomplete output processing gets a separate warning.                                                                                                      |
+| Editing scope left the generated scope checklist stale.                                                                         | The checklist is regenerated, retaining checkmarks for unchanged rules. Handoff and feature coverage remain intact.                                                                        |
+| Policy/scope edits invalidated live readiness but left exported finding reviews marked ready.                                   | Edits regenerate finding exports against current scope/policy. JSON exports include their evaluation timestamp. Recorded historical finding status is preserved.                           |
+| Bare IPv6 scope addresses could not be used as targets.                                                                         | Bare IPv6 addresses normalize to bracketed URL authorities.                                                                                                                                |
 
 ## Boundaries retained
 
@@ -40,3 +40,27 @@ browser fixtures and loopback HTTP services. No engagement scans are required.
 
 Regression coverage: `tests/test_business_logic.py`, alongside scope, readiness,
 installation, traffic, browser, and loopback integration checks.
+
+## Follow-up review — 2026-10-16
+
+- Fixed the tlsx probe combination: JSON output supplies certificate names without
+  combining SAN/CN filters with incompatible TLS probes. Verified against a loopback
+  TLS fixture using the installed binary.
+- Added explicit checkpoint resume. Scope/settings and session revisions must match;
+  completed stages stay intact and a failed target is retried with its original limits.
+- Added analysis-only web handoffs with engagement-specific context, known-session
+  redaction, changed-context checks, provider selection, cancellation, output/time
+  limits and restart interruption. Provider tests use fixtures rather than real API calls.
+- Replaced full-cache browser rendering with indexed summaries, server pagination,
+  literal substring search, filters and lazy evidence access. Index backfill preserves
+  original evidence records.
+- Made total jobs and per-stage target counts optional and unlimited by default.
+  Removed the fixed candidate cutoff. Pending targets live in SQLite; indexed run-key
+  and job-state queries avoid repeatedly deserializing unrelated scan history.
+- Regression cases cover more than 200 scheduled jobs, more than 2,000 retained
+  candidates, finite-limit behavior, legacy and unlimited checkpoint resume, and
+  removal of persisted target queues during confirmed history erasure.
+
+Verification: 102 unit tests (including Wiki export checks), the browser fixture and a 25,000-asset isolated API
+benchmark passed. These checks do not prove compatibility with every installed
+scanner version or model-provider configuration.

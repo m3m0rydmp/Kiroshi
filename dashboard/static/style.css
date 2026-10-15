@@ -1368,3 +1368,24 @@ main,
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+
+[hidden] {
+  display: none !important;
+}
+
+.agent-controls {
+  flex-wrap: wrap;
+}
+.agent-controls select {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.asset-filters {
+  flex-wrap: wrap;
+}
+.asset-filters select,
+.asset-filters input {
+  flex: 1 1 180px;
+  min-width: 0;
+}

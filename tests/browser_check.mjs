@@ -1,5 +1,5 @@
 // Optional Chrome smoke test using its native DevTools pipe; no npm dependencies.
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -189,6 +189,109 @@ try {
   await wait(
     "document.querySelector('#toast')?.textContent === 'Handoff saved'",
   );
+  const fakeAgent = join(directory, "fake-agent");
+  await writeFile(
+    fakeAgent,
+    `#!/usr/bin/env python3
+import sys,time
+text=sys.stdin.read()
+assert 'UNTRUSTED SNAPSHOT JSON:' in text
+assert 'ui-local-secret' not in text
+print('Analyzed selected engagement; observations require verification.', flush=True)
+`,
+    { mode: 0o700 },
+  );
+  await evaluate(
+    `api('settings', {paths:{claude:${JSON.stringify(fakeAgent)}}})`,
+  );
+  await evaluate(
+    "document.querySelector('[data-action=\"prepare-agent\"]').click()",
+  );
+  await wait("document.querySelector('#analyze-agent')?.disabled === false");
+  assert.equal(
+    await evaluate(
+      "document.querySelector('#agent-context').textContent.includes('ui-local-secret')",
+    ),
+    false,
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('#engagement-filter option[value=\"\"]') === null",
+    ),
+    true,
+  );
+  await evaluate("document.querySelector('#analyze-agent').click()");
+  await wait(
+    "document.querySelector('#agent-output')?.textContent.includes('Analyzed selected engagement')",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('#agent-status').textContent.includes('completed')",
+    ),
+    true,
+  );
+  // Seed only this isolated fixture DB: the browser must never render all rows.
+  const assetEngagement = await evaluate("state.engagements[0].id");
+  execFileSync("python3", [
+    "-c",
+    `import json,sqlite3,sys
+c=sqlite3.connect(sys.argv[1])
+rows=[]
+for i in range(123):
+ key='bulk-'+str(i).zfill(3)
+ value='http://127.0.0.1/'+('needle%_value' if i==122 else 'bulk/'+str(i))
+ row=dict(id=key,engagement_id=sys.argv[2],value=value,tool='urlfinder',identity='Anonymous',job_ids=['erased-historical-run'],updated='2026-10-16',detail={'status_code':301 if i==122 else 200,'body':'evidence-only-marker'})
+ rows.append(('asset',key,json.dumps(row)))
+c.executemany('INSERT INTO records VALUES (?,?,?)',rows);c.commit();c.close()
+`,
+    join(directory, "data", "kiroshi.sqlite3"),
+    assetEngagement,
+  ]);
+  await evaluate("navigate('assets')");
+  await wait(
+    "document.querySelector('#asset-page-label')?.textContent.includes('123 matching assets')",
+  );
+  assert.equal(
+    await evaluate("document.querySelectorAll('#asset-table tbody tr').length"),
+    50,
+  );
+  assert.equal(
+    await evaluate(
+      "document.body.textContent.includes('evidence-only-marker')",
+    ),
+    false,
+  );
+  await evaluate("document.querySelector('#asset-next').click()");
+  await wait(
+    "document.querySelector('#asset-page-label')?.textContent.includes('Page 2 of 3')",
+  );
+  await evaluate(
+    "(()=>{const input=document.querySelector('#asset-search');input.value='needle%_value';input.dispatchEvent(new Event('input',{bubbles:true}));})()",
+  );
+  await wait(
+    "document.querySelector('#asset-page-label')?.textContent.includes('1 matching assets')",
+  );
+  assert.equal(
+    await evaluate("document.querySelectorAll('#asset-table tbody tr').length"),
+    1,
+  );
+  await evaluate(
+    "document.querySelector('[data-action=asset-details]').click()",
+  );
+  await wait(
+    "document.querySelector('#asset-detail')?.textContent.includes('evidence-only-marker')",
+  );
+  await evaluate(
+    "closeModal();(()=>{const input=document.querySelector('#asset-search');input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));const filter=document.querySelector('#asset-status');filter.value='3xx';filter.dispatchEvent(new Event('change',{bubbles:true}));})()",
+  );
+  await wait(
+    "document.querySelector('#asset-page-label')?.textContent.includes('1 matching assets')",
+  );
+  await evaluate("document.querySelector('[data-action=asset-run]').click()");
+  await wait(
+    "document.querySelector('#run-form')?.elements.target.value.includes('needle%_value')",
+  );
+  await evaluate("closeModal()");
   await evaluate("document.querySelector('[data-view=\"tools\"]').click()");
   assert.equal(
     await evaluate("document.querySelectorAll('.tool-card').length"),
@@ -358,6 +461,24 @@ print(json.dumps({'url':'http://127.0.0.1:9999/fixture','status_code':200}),flus
     await evaluate("document.querySelector('#workflow-start').disabled"),
     true,
   );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('#workflow-form').elements.max_jobs.value",
+    ),
+    "",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('#workflow-form').elements.max_targets.value",
+    ),
+    "",
+  );
+  assert.equal(
+    await evaluate(
+      "(async()=>{const plan=await api('workflows/preview',{engagement_id:state.engagements[0].id,max_jobs:'',max_targets:''});return plan.max_jobs===null && plan.max_targets===null;})()",
+    ),
+    true,
+  );
   await evaluate(
     `(()=>{const original=window.fetch.bind(window);window.fixtureRequests={preview:0,start:0,erase:0};window.fixtureFailPreview=true;window.fetch=async(input,init)=>{const path=String(input);const kind=path.endsWith('/api/workflows/preview')?'preview':path.endsWith('/api/workflows')?'start':path.endsWith('/api/jobs/erase')?'erase':null;if(kind){window.fixtureRequests[kind]++;await new Promise(r=>setTimeout(r,1200));if(kind==='preview'&&window.fixtureFailPreview){window.fixtureFailPreview=false;return new Response(JSON.stringify({error:'Fixture preview failure'}),{status:400});}}return original(input,init);};document.querySelector('#workflow-form').elements.max_jobs.value=2;document.querySelector('[data-action=workflow-preview]').click();})()`,
   );
@@ -433,6 +554,38 @@ print(json.dumps({'url':'http://127.0.0.1:9999/fixture','status_code':200}),flus
   await writeFile(
     "/tmp/kiroshi-workflow.png",
     Buffer.from(workflowShot.data, "base64"),
+  );
+  // A failed checkpoint resumes in the same workflow, preserving prior attempts.
+  await writeFile(
+    fakePath,
+    '#!/usr/bin/env python3\nimport sys\nprint("Fixture failure before resume")\nsys.exit(1)\n',
+    { mode: 0o700 },
+  );
+  await evaluate(
+    `(async()=>{closeModal();const payload={engagement_id:state.engagements[0].id,max_jobs:3,max_targets:3,allow_repeat:true};const plan=await api('workflows/preview',payload);const w=await api('workflows',{...payload,plan_token:plan.plan_token});window.resumeFixture=w.id;await refresh(false);await workflowModal(w.id);})()`,
+  );
+  await wait(
+    "document.querySelector('[data-action=workflow-resume]') !== null",
+  );
+  await writeFile(
+    fakePath,
+    '#!/usr/bin/env python3\nimport json\nprint(json.dumps({"url":"http://127.0.0.1:9999/resumed","host":"127.0.0.1","status_code":200}))\n',
+    { mode: 0o700 },
+  );
+  await evaluate(
+    "document.querySelector('[data-action=workflow-resume]').click()",
+  );
+  await wait(
+    "document.querySelector('#toast')?.textContent.includes('resumed from its saved stage')",
+  );
+  await wait(
+    "document.querySelector('#workflow-meta')?.textContent.includes('Coverage limited')",
+  );
+  assert.equal(
+    await evaluate(
+      "(async()=>{const w=await api('workflows/'+window.resumeFixture);return w.resume_count===1 && w.job_ids.length===3;})()",
+    ),
+    true,
   );
   await evaluate(
     "closeModal();navigate('jobs');document.querySelector('[data-action=erase-history]').click()",
@@ -543,7 +696,7 @@ print(json.dumps({'url':'http://127.0.0.1:9999/fixture','status_code':200}),flus
     Buffer.from(mobile.data, "base64"),
   );
   console.log(
-    "PASS browser: overview, engagements, sessions, command previews, handoff, tools, report readiness gate, confirmed review, reference dialogs, live tool output, rerun identity, ordered workflows, loading/error recovery, confirmed history erasure, private webhook configuration and delivery, performance panel, mobile layout",
+    "PASS browser: overview, engagements, sessions, command previews, handoff, tools, report readiness gate, confirmed review, reference dialogs, live tool output, rerun identity, ordered workflows, checkpoint resume, web agent analysis, paginated asset search and evidence, loading/error recovery, confirmed history erasure, private webhook configuration and delivery, performance panel, mobile layout",
   );
   console.log(
     "Screenshots: /tmp/kiroshi-overview.png and /tmp/kiroshi-mobile.png",

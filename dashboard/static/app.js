@@ -15,6 +15,12 @@ let view = "overview",
   activeLog = null,
   activeWorkflow = null,
   pollBusy = false;
+let agentRequest = 0,
+  agentSnapshot = null,
+  activeAnalysis = null;
+let assetPage = { items: [], page: 1, pages: 1, total: 0 },
+  assetRequest = 0,
+  assetTimer = null;
 const $ = (s) => document.querySelector(s);
 const esc = (v) =>
   String(v ?? "").replace(
@@ -86,11 +92,21 @@ function newButton() {
 function engagementFilter() {
   return `<select id="engagement-filter" aria-label="Filter engagement"><option value="">All engagements</option>${state.engagements.map((e) => `<option value="${e.id}" ${e.id === selected ? "selected" : ""}>${esc(e.name)}</option>`).join("")}</select>`;
 }
+function resumable(w) {
+  return [
+    "failed",
+    "cancelled",
+    "interrupted",
+    "blocked",
+    "rate_limited",
+    "timed_out",
+  ].includes(w.status);
+}
 function workflowTable(rows) {
   if (!rows.length) return "";
   return panel(
     "Engagement workflows",
-    `<div class="table-wrap"><table><thead><tr><th>Engagement</th><th>Stage</th><th>Status</th><th>Tool runs</th><th></th></tr></thead><tbody>${rows.map((w) => `<tr><td>${esc(engagementName(w.engagement_id))}</td><td>${Math.min(w.stage_index + 1, w.stages.length)} / ${w.stages.length}<div class="sub">${esc(w.stages[w.stage_index]?.title || "All stages ended")}</div></td><td>${pill(w.status)}${w.limited ? '<div class="sub">Coverage limited — review skipped targets/stages</div>' : ""}</td><td>${w.job_ids.length} / ${w.max_jobs}</td><td><button class="btn small" data-action="workflow-log" data-id="${w.id}">Live workflow ↗</button></td></tr>`).join("")}</tbody></table></div>`,
+    `<div class="table-wrap"><table><thead><tr><th>Engagement</th><th>Stage</th><th>Status</th><th>Tool runs</th><th></th></tr></thead><tbody>${rows.map((w) => `<tr><td>${esc(engagementName(w.engagement_id))}</td><td>${Math.min(w.stage_index + 1, w.stages.length)} / ${w.stages.length}<div class="sub">${esc(w.stages[w.stage_index]?.title || "All stages ended")}</div></td><td>${pill(w.status)}${w.limited ? '<div class="sub">Coverage limited — review skipped targets/stages</div>' : ""}</td><td>${w.job_ids.length} / ${w.max_jobs || "Unlimited"}</td><td><button class="btn small" data-action="workflow-log" data-id="${w.id}">Live workflow ↗</button>${resumable(w) ? `<button class="btn small primary" data-action="workflow-resume" data-id="${w.id}">Resume workflow</button>` : ""}</td></tr>`).join("")}</tbody></table></div>`,
   );
 }
 function busyForm(form, message, detail, button) {
@@ -139,7 +155,7 @@ function workflowForm(id) {
   modal(
     "Run engagement workflow",
     "Tools execute one by one in the displayed order. New discoveries feed later stages; httpx runs again on newly found hosts and URLs.",
-    `<form id="workflow-form"><label>Engagement</label><select name="engagement_id">${state.engagements.map((e) => `<option value="${e.id}" ${e.id === engagement.id ? "selected" : ""}>${esc(e.name)}</option>`).join("")}</select><div class="form-grid"><div><label>Path discovery tool</label><select name="discovery"><option value="ffuf">ffuf</option><option value="feroxbuster">feroxbuster</option></select></div>${field("Maximum total tool jobs", "max_jobs", 200, "number")}${field("Maximum new targets per stage", "max_targets", 50, "number")}<div><label>HTTP identity</label><select name="auth_id"><option value="">Anonymous</option>${state.sessions
+    `<form id="workflow-form"><label>Engagement</label><select name="engagement_id">${state.engagements.map((e) => `<option value="${e.id}" ${e.id === engagement.id ? "selected" : ""}>${esc(e.name)}</option>`).join("")}</select><div class="form-grid"><div><label>Path discovery tool</label><select name="discovery"><option value="ffuf">ffuf</option><option value="feroxbuster">feroxbuster</option></select></div><div><label>Total tool-job limit (optional)</label><input name="max_jobs" type="number" min="0" step="1" placeholder="Unlimited"><p class="help">Blank or 0 means unlimited total jobs. Enter a positive number to set a cap.</p></div><div><label>New targets per stage (optional)</label><input name="max_targets" type="number" min="0" step="1" placeholder="Unlimited"><p class="help">Blank or 0 processes every eligible target. Enter a positive number to cap each stage.</p></div><div><label>HTTP identity</label><select name="auth_id"><option value="">Anonymous</option>${state.sessions
       .filter((s) => s.engagement_id === engagement.id)
       .map(
         (s) =>
@@ -168,7 +184,7 @@ async function updateWorkflow() {
     (d) => d.open,
   );
   $("#workflow-meta").innerHTML =
-    `<div class="row spread"><h3>${esc(engagementName(w.engagement_id))} · ${pill(w.status)} ${["queued", "running"].includes(w.status) ? '<span class="busy-spinner" aria-label="Workflow active"></span>' : ""}</h3>${["queued", "running"].includes(w.status) ? `<button class="btn small danger" data-action="workflow-cancel" data-id="${w.id}">Stop workflow</button>` : ""}</div><p>${w.job_ids.length} tool jobs launched · maximum ${w.max_jobs}. ${w.limited ? "Coverage limited: review skipped stages and limits." : ""}</p>${w.error ? `<div class="note neutral">${esc(w.error)}</div>` : ""}<p><strong>Stage ${Math.min(w.stage_index + 1, w.stages.length)} / ${w.stages.length}: ${esc(w.stages[w.stage_index]?.title || "All stages ended")}</strong></p><details><summary>Ordered stages</summary><ol class="workflow-stages">${w.stages.map((stage, i) => `<li class="${i === w.stage_index ? "current-stage" : ""}"><strong>${esc(stage.tool)}</strong> · ${esc(stage.title)}<span class="sub">${esc(stage.status || (["queued", "running"].includes(w.status) ? (i === w.stage_index ? w.status : "pending") : "not executed"))} · ${stage.launched || 0} launched · ${stage.skipped || 0} cached/reused${stage.reason ? " · " + esc(stage.reason) : ""}</span></li>`).join("")}</ol></details><details><summary>Workflow activity</summary>${(w.activity || []).map((a) => `<p class="help">${esc(new Date(a.at).toLocaleTimeString())} · ${esc(a.message)}</p>`).join("")}</details>`;
+    `<div class="row spread"><h3>${esc(engagementName(w.engagement_id))} · ${pill(w.status)} ${["queued", "running"].includes(w.status) ? '<span class="busy-spinner" aria-label="Workflow active"></span>' : ""}</h3>${["queued", "running"].includes(w.status) ? `<button class="btn small danger" data-action="workflow-cancel" data-id="${w.id}">Stop workflow</button>` : resumable(w) ? `<button class="btn small primary" data-action="workflow-resume" data-id="${w.id}">Resume workflow</button>` : ""}</div><p>${w.job_ids.length} tool jobs launched · total limit: ${w.max_jobs || "Unlimited"}. ${w.limited ? "Coverage limited: review skipped stages and limits." : ""}</p>${w.error ? `<div class="note neutral">${esc(w.error)}</div>` : ""}<p><strong>Stage ${Math.min(w.stage_index + 1, w.stages.length)} / ${w.stages.length}: ${esc(w.stages[w.stage_index]?.title || "All stages ended")}</strong></p><details><summary>Ordered stages</summary><ol class="workflow-stages">${w.stages.map((stage, i) => `<li class="${i === w.stage_index ? "current-stage" : ""}"><strong>${esc(stage.tool)}</strong> · ${esc(stage.title)}<span class="sub">${esc(stage.status || (["queued", "running"].includes(w.status) ? (i === w.stage_index ? w.status : "pending") : "not executed"))} · ${stage.launched || 0} launched · ${stage.skipped || 0} cached/reused${stage.reason ? " · " + esc(stage.reason) : ""}</span></li>`).join("")}</ol></details><details><summary>Workflow activity</summary>${(w.activity || []).map((a) => `<p class="help">${esc(new Date(a.at).toLocaleTimeString())} · ${esc(a.message)}</p>`).join("")}</details>`;
   $("#workflow-meta")
     .querySelectorAll("details")
     .forEach((d, i) => {
@@ -241,7 +257,7 @@ function overview() {
       ["Active jobs", running.length, "One worker · bounded execution", "↗"],
       [
         "Cached assets",
-        state.assets.length,
+        state.asset_counts?.total ?? state.assets.length,
         "Persistent across anonymous & session runs",
         "⌘",
       ],
@@ -319,20 +335,88 @@ function assetTable(rows) {
       "No cached assets yet",
       "Run discovery or HTTP inventory. Eligible results are normalized here; raw logs are always retained.",
     );
-  return `<div class="table-wrap"><table><thead><tr><th>Asset / endpoint</th><th>Source</th><th>Latest identity</th><th>Runs</th><th></th></tr></thead><tbody>${rows.map((a) => `<tr><td class="mono path">${esc(a.value)}</td><td>${esc(a.tool)}</td><td>${esc(a.identity)}</td><td>${a.job_ids.length}</td><td><button class="btn small" data-action="asset-run" data-id="${a.id}">Run on asset ↗</button></td></tr>`).join("")}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>Asset / endpoint</th><th>Host / type</th><th>Source / HTTP</th><th>Latest identity</th><th>Runs</th><th></th></tr></thead><tbody>${rows.map((a) => `<tr><td class="mono path">${esc(a.value)}</td><td class="path">${esc(a.host || "—")}<div class="sub">${esc(a.asset_type || "")}</div></td><td>${esc(a.tool)}<div class="sub">${esc(a.status || "")}</div></td><td>${esc(a.identity)}</td><td>${a.job_count ?? a.job_ids?.length ?? 0}</td><td><button class="btn small" data-action="asset-details" data-id="${a.id}">Evidence</button><button class="btn small" data-action="asset-run" data-id="${a.id}">Run on asset ↗</button></td></tr>`).join("")}</tbody></table></div>`;
 }
 function assetsView() {
   return (
     heading(
       "Asset cache",
-      "Persisted discoveries. New sessions never discard earlier recon.",
+      "Organized by engagement and host. Search the full cache; only one page is loaded.",
     ) +
-    `<div class="toolbar">${engagementFilter()}<input id="asset-search" placeholder="Filter cached URLs or hosts…" aria-label="Search cached assets"></div>` +
+    `<div class="toolbar asset-filters">${engagementFilter()}<input id="asset-search" maxlength="200" placeholder="Search all cached URLs or hosts…" aria-label="Search cached assets"><select id="asset-host" aria-label="Filter by host"><option value="">All hosts</option></select><select id="asset-type" aria-label="Filter asset type"><option value="">All types</option><option value="host">Hostnames</option><option value="ip">IP addresses</option><option value="url">URLs</option></select><select id="asset-source" aria-label="Filter discovery source"><option value="">All sources</option></select><select id="asset-status" aria-label="Filter HTTP status"><option value="">All HTTP statuses</option><option value="2xx">2xx</option><option value="3xx">3xx</option><option value="4xx">4xx</option><option value="5xx">5xx</option><option value="none">No HTTP observation</option></select><select id="asset-sort" aria-label="Sort assets"><option value="recent">Recently observed</option><option value="host">Group by host</option></select><select id="asset-limit" aria-label="Assets per page"><option>25</option><option selected>50</option><option>100</option><option>200</option></select><button class="btn" data-action="assets-refresh">Refresh</button></div>` +
     panel(
       "Discovered assets",
-      `<div id="asset-table">${assetTable(filtered(state.assets))}</div>`,
+      `<div id="asset-loading" class="request-progress" role="status"><span class="busy-spinner" aria-hidden="true"></span>Loading asset summaries…</div><div id="asset-summary" class="panel-body help" role="status"></div><div id="asset-table"></div><div class="panel-body row spread"><button class="btn" id="asset-prev" data-action="asset-prev" disabled>Previous</button><span id="asset-page-label">Loading…</span><button class="btn" id="asset-next" data-action="asset-next" disabled>Next</button></div>`,
     )
   );
+}
+async function loadAssets(page = 1) {
+  if (view !== "assets" || !$("#asset-search")) return;
+  const request = ++assetRequest;
+  const params = new URLSearchParams({
+    engagement_id: selected,
+    page,
+    limit: $("#asset-limit").value,
+    q: $("#asset-search").value,
+    host: $("#asset-host").value,
+    type: $("#asset-type").value,
+    tool: $("#asset-source").value,
+    status: $("#asset-status").value,
+    sort: $("#asset-sort").value,
+  });
+  $("#asset-loading").hidden = false;
+  $("#asset-prev").disabled = $("#asset-next").disabled = true;
+  try {
+    const result = await api("assets?" + params);
+    if (view !== "assets" || request !== assetRequest) return;
+    assetPage = result;
+    $("#asset-table").innerHTML = result.total
+      ? assetTable(result.items)
+      : empty(
+          "No matching assets",
+          "Change the filters or run discovery to collect assets.",
+        );
+    $("#asset-page-label").textContent =
+      `Page ${result.page} of ${result.pages} · ${result.total.toLocaleString()} matching assets`;
+    $("#asset-summary").textContent =
+      Object.entries(result.facets.types)
+        .map(([k, v]) => `${k}: ${v.toLocaleString()}`)
+        .join(" · ") +
+      ". Raw evidence remains stored and loads only when requested. Host filter lists the 100 largest groups; search covers every asset.";
+    const options = (selector, rows, label) => {
+      const select = $(selector),
+        current = select.value;
+      select.innerHTML =
+        `<option value="">${label}</option>` +
+        rows
+          .map(
+            ([value, n]) =>
+              `<option value="${esc(value)}">${esc(value)} (${n.toLocaleString()})</option>`,
+          )
+          .join("");
+      select.value = current;
+    };
+    options(
+      "#asset-host",
+      result.facets.hosts.map((h) => [h.host, h.count]),
+      "All hosts",
+    );
+    options(
+      "#asset-source",
+      Object.entries(result.facets.sources),
+      "All sources",
+    );
+    $("#asset-prev").disabled = result.page <= 1;
+    $("#asset-next").disabled = result.page >= result.pages;
+  } catch (error) {
+    if (view === "assets" && request === assetRequest) {
+      $("#asset-summary").textContent = error.message;
+      toast(error.message, true);
+    }
+  } finally {
+    if (view === "assets" && request === assetRequest)
+      $("#asset-loading").hidden = true;
+  }
 }
 function jobsView() {
   return (
@@ -484,7 +568,7 @@ function agentView() {
             "Agent workspaces are generated from the scaffold script.",
           ),
         )
-      : `<div class="toolbar">${engagementFilter()}</div><div class="note neutral">Agent execution stays in your terminal. This page prepares the workspace and launch command; it does not run an unattended AI agent. Your existing Claude Code provider configuration applies.</div><div class="grid-two"><div>${panel("Shared handoff", `<div class="panel-body"><label for="handoff-text">Current position, evidence references, pending cleanup and next action</label><textarea id="handoff-text" rows="15" placeholder="Loading…"></textarea><div class="form-actions"><button class="btn primary" data-action="save-handoff" data-id="${e.id}">Save handoff</button></div></div>`)}</div><div>${panel("Launch locally", `<div class="panel-body stack"><div><label>ENGAGEMENT</label><strong>${esc(e.name)}</strong></div><div><label>TERMINAL COMMAND</label><pre id="agent-command" class="terminal">Loading…</pre></div><button class="btn" data-action="copy-agent">Copy command</button><p class="help">Stop the current agent before launching another. Sessions saved in this dashboard are not automatically injected into an external agent process.</p><div><label>WORKSPACE</label><code id="agent-path" class="path"></code></div></div>`)}</div></div>`)
+      : `<div class="toolbar">${engagementFilter().replace('<option value="">All engagements</option>', "")}</div><div class="note neutral">Prepare this engagement’s cached data, review the context, then run analysis here with Claude / your configured provider or Codex. Analysis does not execute scanners or change findings.</div>${panel("Analyze gathered data", `<div class="panel-body stack"><div class="row agent-controls"><label for="agent-provider">Provider</label><select id="agent-provider"><option value="claude" ${e.provider === "claude" ? "selected" : ""}>Claude / configured provider</option><option value="codex" ${e.provider === "codex" ? "selected" : ""}>Codex</option></select><button class="btn" data-action="prepare-agent" data-id="${e.id}">Prepare context</button><button class="btn primary" id="analyze-agent" data-action="analyze-agent" data-id="${e.id}" disabled>Analyze gathered data</button><button class="btn danger" id="cancel-analysis" data-action="cancel-analysis" hidden>Cancel analysis</button></div><p class="help">Sends the reviewed context to your configured model provider. Saved sessions, raw logs, headers and response bodies are excluded. Review paths and observations for sensitive data. Five-minute limit; one analysis at a time.</p><span id="agent-spinner" class="busy-spinner" aria-label="Analysis active" hidden></span><p id="agent-status" role="status" aria-live="polite">Prepare context to begin.</p><details><summary>Context sent to the agent</summary><pre class="terminal" id="agent-context">No context prepared.</pre></details><pre class="terminal" id="agent-output" aria-label="Agent analysis output">No analysis yet.</pre></div>`)}<div class="grid-two"><div>${panel("Shared handoff", `<div class="panel-body"><label for="handoff-text">Current position, evidence references, pending cleanup and next action</label><textarea id="handoff-text" rows="15" placeholder="Loading…"></textarea><div class="form-actions"><button class="btn primary" data-action="save-handoff" data-id="${e.id}">Save handoff</button></div></div>`)}</div><div>${panel("Launch locally", `<div class="panel-body stack"><div><label>ENGAGEMENT</label><strong>${esc(e.name)}</strong></div><div><label>TERMINAL COMMAND</label><pre id="agent-command" class="terminal">Loading…</pre></div><button class="btn" data-action="copy-agent">Copy command</button><p class="help">Stop the current agent before launching another. Sessions saved in this dashboard are not automatically injected into an external agent process.</p><div><label>WORKSPACE</label><code id="agent-path" class="path"></code></div></div>`)}</div></div>`)
   );
 }
 function render() {
@@ -512,6 +596,10 @@ function render() {
     tools: toolsView,
     agent: agentView,
   }[view]();
+  if (view === "assets") {
+    assetRequest++;
+    loadAssets().catch((e) => toast(e.message, true));
+  }
   if (view === "agent" && state.engagements.length)
     loadAgent().catch((e) => toast(e.message, true));
 }
@@ -770,11 +858,35 @@ async function updateLog() {
 async function loadAgent() {
   const e =
     state.engagements.find((e) => e.id === selected) || state.engagements[0];
+  if (!e) return;
+  selected = e.id;
+  const request = ++agentRequest;
+  agentSnapshot = null;
+  activeAnalysis = null;
   const a = await api("agent/" + e.id);
-  if (view !== "agent") return;
+  if (view !== "agent" || selected !== e.id || request !== agentRequest) return;
+  $("#engagement-filter").value = e.id;
   $("#handoff-text").value = a.handoff;
   $("#agent-command").textContent = a.command;
   $("#agent-path").textContent = a.workspace;
+  if (a.analyses?.length) showAnalysis(a.analyses[0]);
+}
+function showAnalysis(a) {
+  if (view !== "agent" || selected !== a.engagement_id) return;
+  const running = ["queued", "running", "cancelling"].includes(a.status);
+  activeAnalysis = running ? a.id : null;
+  $("#agent-status").textContent =
+    `${a.provider} · ${a.status.replaceAll("_", " ")} · ${a.received_bytes || 0} output bytes received${a.error ? " · " + a.error : ""}`;
+  $("#agent-spinner").hidden = !running;
+  $("#agent-output").textContent =
+    a.output ||
+    (running
+      ? "Analyzing the prepared context… The answer appears after completion."
+      : "No answer returned.");
+  $("#cancel-analysis").hidden = !running;
+  $("#cancel-analysis").dataset.id = a.id;
+  $("#analyze-agent").disabled = running || !agentSnapshot;
+  $("#agent-provider").disabled = running;
 }
 document.addEventListener("click", async (event) => {
   const el = event.target.closest("[data-action],[data-view]");
@@ -804,6 +916,19 @@ document.addEventListener("click", async (event) => {
         break;
       case "workflow-log":
         await workflowModal(id);
+        break;
+      case "workflow-resume":
+        el.disabled = true;
+        el.textContent = "Resuming…";
+        try {
+          await api("workflows/resume", { id });
+          await refresh(false);
+          await workflowModal(id);
+          toast("Workflow resumed from its saved stage");
+        } finally {
+          el.disabled = false;
+          el.textContent = "Resume workflow";
+        }
         break;
       case "workflow-cancel":
         await api("workflows/cancel", { id });
@@ -871,7 +996,7 @@ document.addEventListener("click", async (event) => {
           const plan = await api("workflows/preview", data);
           form.dataset.planToken = plan.plan_token;
           $("#workflow-preview").innerHTML =
-            `<p>${plan.initial_hosts} scoped seed hosts · ${plan.passive_seeds} passive seeds · up to ${plan.max_targets} new targets/stage · ${plan.max_jobs} total jobs</p><ol>${plan.stages.map((stage) => `<li><strong>${esc(stage.tool)}</strong> · ${esc(stage.title)} ${stage.available ? "" : "(unavailable — will be skipped)"}</li>`).join("")}</ol><p class="help">${esc(plan.notice)}</p>`;
+            `<p>${plan.initial_hosts} scoped seed hosts · ${plan.passive_seeds} passive seeds · ${plan.max_targets ? "up to " + plan.max_targets : "Unlimited"} new targets/stage · ${plan.max_jobs ? plan.max_jobs + " total jobs" : "Unlimited total jobs"}</p><ol>${plan.stages.map((stage) => `<li><strong>${esc(stage.tool)}</strong> · ${esc(stage.title)} ${stage.available ? "" : "(unavailable — will be skipped)"}</li>`).join("")}</ol><p class="help">${esc(plan.notice)}</p>`;
           $("#form-error").textContent = "";
         } finally {
           restore();
@@ -883,8 +1008,37 @@ document.addEventListener("click", async (event) => {
       case "run":
         runModal(id);
         break;
+      case "assets-refresh":
+        await loadAssets(assetPage.page);
+        break;
+      case "asset-prev":
+        await loadAssets(assetPage.page - 1);
+        break;
+      case "asset-next":
+        await loadAssets(assetPage.page + 1);
+        break;
+      case "asset-details": {
+        modal(
+          "Cached asset evidence",
+          "Stored observations. Scanner output is evidence to review, not a confirmed vulnerability.",
+          `<pre id="asset-detail" class="terminal" data-id="${esc(id)}">Loading stored evidence…</pre>`,
+        );
+        const detail = await api("assets/" + id);
+        const pre = $("#asset-detail");
+        if (pre && pre.dataset.id === id) {
+          const text = JSON.stringify(detail, null, 2);
+          pre.textContent =
+            text.slice(0, 50000) +
+            (text.length > 50000
+              ? "\n[Display limited to 50,000 characters]"
+              : "");
+        }
+        break;
+      }
       case "asset-run": {
-        const a = state.assets.find((a) => a.id === id);
+        const a =
+          assetPage.items.find((a) => a.id === id) ||
+          state.assets.find((a) => a.id === id);
         runModal(a.engagement_id, a.value);
         break;
       }
@@ -1000,6 +1154,54 @@ document.addEventListener("click", async (event) => {
         );
         break;
       }
+      case "prepare-agent": {
+        el.disabled = true;
+        el.textContent = "Preparing…";
+        agentSnapshot = null;
+        $("#analyze-agent").disabled = true;
+        try {
+          const snapshot = await api("agent/prepare", { engagement_id: id });
+          if (view !== "agent" || selected !== id) break;
+          agentSnapshot = snapshot;
+          $("#agent-context").textContent = snapshot.text;
+          $("#agent-status").textContent =
+            "Context ready. Included / total: " +
+            Object.keys(snapshot.totals)
+              .map(
+                (k) => `${k} ${snapshot.included[k]} / ${snapshot.totals[k]}`,
+              )
+              .join(" · ");
+          $("#analyze-agent").disabled = !!activeAnalysis;
+          toast("Engagement context prepared");
+        } finally {
+          el.disabled = false;
+          el.textContent = "Prepare context";
+        }
+        break;
+      }
+      case "analyze-agent": {
+        if (!agentSnapshot || activeAnalysis) break;
+        el.disabled = true;
+        $("#agent-status").textContent = "Starting analysis…";
+        try {
+          const a = await api("agent/analyze", {
+            engagement_id: id,
+            provider: $("#agent-provider").value,
+            digest: agentSnapshot.digest,
+          });
+          showAnalysis(a);
+        } catch (error) {
+          if (view === "agent" && selected === id) {
+            $("#agent-status").textContent = error.message;
+            el.disabled = false;
+          }
+          throw error;
+        }
+        break;
+      }
+      case "cancel-analysis":
+        showAnalysis(await api("agent/cancel", { id }));
+        break;
       case "save-handoff":
         await api("handoff", {
           engagement_id: id,
@@ -1185,6 +1387,17 @@ document.addEventListener("change", (event) => {
   }
   if (["run-engagement", "run-tool"].includes(event.target.id))
     updateRunSessions();
+  if (
+    [
+      "asset-host",
+      "asset-type",
+      "asset-source",
+      "asset-status",
+      "asset-sort",
+      "asset-limit",
+    ].includes(event.target.id)
+  )
+    loadAssets(1);
   if (event.target.id === "tool-filter") filterTools();
 });
 document.addEventListener("input", (event) => {
@@ -1195,12 +1408,12 @@ document.addEventListener("input", (event) => {
       !form.elements.url.value.trim() && !state.notifications?.configured;
   }
   if (event.target.id === "reference-search") filterReferences();
-  if (event.target.id === "asset-search")
-    $("#asset-table").innerHTML = assetTable(
-      filtered(state.assets).filter((a) =>
-        a.value.toLowerCase().includes(event.target.value.toLowerCase()),
-      ),
-    );
+  if (event.target.id === "asset-search") {
+    clearTimeout(assetTimer);
+    // Invalidate an older response immediately, before the debounce expires.
+    assetRequest++;
+    assetTimer = setTimeout(() => loadAssets(1), 250);
+  }
   if (event.target.id === "tool-search") filterTools();
 });
 function filterTools() {
@@ -1233,6 +1446,8 @@ setInterval(async () => {
   if (pollBusy) return;
   pollBusy = true;
   try {
+    if (activeAnalysis && view === "agent")
+      showAnalysis(await api("analyses/" + activeAnalysis));
     if (activeWorkflow) await updateWorkflow();
     else if (activeLog) await updateLog();
     if (

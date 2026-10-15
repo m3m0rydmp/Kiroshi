@@ -189,6 +189,110 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(result["status"], "cancelled")
         self.assertEqual(len(result["job_ids"]), 1)
 
+    def failed_tls_workflow(self, **changes):
+        binary = Path(self.directory.name) / 'tlsx'
+        binary.write_text('#!/usr/bin/env python3\nimport sys\nprint("FTL incompatible fixture flags")\nsys.exit(1)\n')
+        workflow = self.done(self.start(**changes))
+        self.assertEqual(workflow['status'], 'failed')
+        self.assertEqual(workflow['stage_index'], 3)
+        binary.write_text(FAKE)
+        return workflow
+
+    def test_resume_legacy_failed_stage_retries_target_without_replaying_completed_stages(self):
+        failed = self.failed_tls_workflow()
+        before = list(failed['job_ids'])
+        failed.pop('stopped_job', None)  # Existing workflow records predate checkpoints.
+        self.app.put('workflow', failed)
+        with self.app.lock:
+            resumed = self.app.resume_workflow(failed['id'])
+            self.assertEqual(resumed['id'], failed['id'])
+            with self.assertRaisesRegex(ValueError, 'stopped'):
+                self.app.resume_workflow(failed['id'])
+        result = self.done(resumed)
+        self.assertEqual(result['status'], 'completed', result.get('error'))
+        self.assertEqual(result['job_ids'][:len(before)], before)
+        added = [self.app.get('job', key) for key in result['job_ids'][len(before):]]
+        self.assertEqual(added[0]['tool'], 'tlsx')
+        self.assertEqual(added[0]['target'], self.app.get('job', before[-1])['target'])
+        self.assertTrue(all(j['workflow_stage'] >= 4 for j in added))
+        self.assertEqual(result['resume_count'], 1)
+        self.assertEqual(self.app.get('job', before[-1])['status'], 'failed')
+
+    def test_resume_rejects_changed_scope_and_exhausted_limits(self):
+        failed = self.failed_tls_workflow()
+        failed['max_jobs'] = len(failed['job_ids'])
+        self.app.put('workflow', failed)
+        with self.assertRaisesRegex(ValueError, 'limit'):
+            self.app.resume_workflow(failed['id'])
+        failed['max_jobs'] = 150
+        self.app.put('workflow', failed)
+        self.app.save_engagement({**self.e, 'scope':'example.test *.example.test new.test'})
+        with self.assertRaisesRegex(ValueError, 'changed'):
+            self.app.resume_workflow(failed['id'])
+        self.assertEqual(self.app.get('workflow', failed['id'])['status'], 'failed')
+
+    def test_total_job_limit_defaults_to_unlimited_and_accepts_explicit_caps(self):
+        for value in (None, '', 0, '0'):
+            plan = self.app.workflow_plan({**self.payload, 'max_jobs':value})
+            self.assertIsNone(plan['max_jobs'])
+        payload = {k:v for k,v in self.payload.items() if k not in ('max_jobs','max_targets')}
+        self.assertIsNone(self.app.workflow_plan(payload)['max_jobs'])
+        self.assertIsNone(self.app.workflow_plan(payload)['max_targets'])
+        self.assertEqual(self.app.workflow_plan({**payload, 'max_jobs':5000})['max_jobs'],5000)
+        for value in (-1, 'bad', 1.5, True):
+            with self.assertRaises(ValueError):
+                self.app.workflow_plan({**payload, 'max_jobs':value})
+
+    def test_unlimited_workflow_schedules_beyond_200_jobs_without_queueing_processes(self):
+        # Exercise scheduler checkpoints and cache reuse without network/process work.
+        with self.app.lock:
+            for i in range(260):
+                self.app.put('asset',dict(id='many-'+str(i),engagement_id=self.e['id'],value='https://example.test/path/'+str(i),detail={'status_code':200}))
+            counter = [0]
+            def complete(payload):
+                counter[0] += 1
+                job = {**payload,'id':'synthetic-'+str(counter[0]),'run_key':self.app.run_key(payload),'status':'completed','auth_id':None}
+                self.app.put('job',job)
+                self.app.remember_run(job)
+                return job
+            tools = [{**t,'runnable':t['name']=='httpx'} for t in self.tools]
+            with patch.object(self.app,'tools',return_value=tools), patch.object(self.app,'enqueue',side_effect=complete):
+                workflow = self.start(max_jobs=0, max_targets=200)
+                for _ in range(1000):
+                    self.app.advance_workflow(workflow)
+                    workflow = self.app.get('workflow',workflow['id'])
+                    if workflow['status'] not in ('queued','running'): break
+            self.assertNotIn(workflow['status'],('queued','running','failed'))
+            self.assertGreater(len(workflow['job_ids']),200)
+            self.assertFalse(any('Total job limit reached' in event['message'] for event in workflow['activity']))
+            self.assertEqual(self.app.pending_job_count(),0)
+
+    def test_large_stage_keeps_all_candidates_in_sqlite_without_large_workflow_json(self):
+        with self.app.lock:
+            for i in range(2105):
+                self.app.put('asset',dict(id='large-'+str(i),engagement_id=self.e['id'],value='https://example.test/large/'+str(i),detail={}))
+            workflow = self.start(max_jobs=0,max_targets=0)
+            workflow['stage_index'] = 2
+            with patch.object(self.app,'enqueue',side_effect=ValueError('Fixture stop before process launch')):
+                with self.assertRaisesRegex(ValueError,'Fixture stop'):
+                    self.app.advance_workflow(workflow)
+            stage = workflow['stages'][2]
+            self.assertGreater(stage['target_count'],2000)
+            self.assertNotIn('targets',stage)
+            stored = self.app.db.execute('SELECT count(*) FROM workflow_targets WHERE workflow_id=? AND stage_index=2',(workflow['id'],)).fetchone()[0]
+            self.assertEqual(stored,stage['target_count'])
+            self.assertLess(len(json.dumps(workflow)),10000)
+            workflow['status'] = 'cancelled'
+            self.app.put('workflow',workflow)
+            self.app.erase_history({'confirmed':True,'engagement_id':self.e['id']})
+            self.assertEqual(self.app.db.execute('SELECT count(*) FROM workflow_targets').fetchone()[0],0)
+
+    def test_unlimited_workflow_can_resume_after_failure(self):
+        failed = self.failed_tls_workflow(max_jobs=0)
+        self.assertIsNone(failed['max_jobs'])
+        result = self.done(self.app.resume_workflow(failed['id']))
+        self.assertEqual(result['status'],'completed',result.get('error'))
+
     def test_wildcard_seed_is_passive_only(self):
         e = self.app.save_engagement(dict(name="Wildcard fixture", scope="*.wildcard.test", authorized=True))
         self.assertEqual(self.app.workflow_targets(e, "hosts"), [])

@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 import uuid
 
 from .tools import allowed, passive_seed, target_url
-from .traffic import HTTP_TOOLS, response_status
+from .traffic import HTTP_TOOLS
 
 
 ACTIVE = {"queued", "running"}
@@ -35,8 +35,21 @@ def stages(discovery):
 
 
 class WorkflowMixin:
+    def stage_target(self, workflow, stage, position):
+        if "targets" in stage:  # Checkpoints created by older versions.
+            return stage["targets"][position] if 0 <= position < len(stage["targets"]) else None
+        with self.lock:
+            row = self.db.execute("SELECT target FROM workflow_targets WHERE workflow_id=? AND stage_index=? AND position=?", (workflow["id"], workflow["stage_index"], position)).fetchone()
+        return row[0] if row else None
+
     def workflow_targets(self, engagement, source):
-        assets = [a for a in self.all("asset") if a["engagement_id"] == engagement["id"]]
+        self.sync_asset_index()
+        with self.lock:
+            if source in ("hosts", "passive"):
+                assets = self.db.execute("SELECT DISTINCT host,NULL FROM asset_index WHERE engagement_id=? AND host<>''", (engagement["id"],)).fetchall()
+            else:
+                responding = " AND (status BETWEEN 200 AND 399 OR status IN (401,403))" if source in ("origins", "live_urls") else ""
+                assets = self.db.execute("SELECT value,status FROM asset_index WHERE engagement_id=?" + responding + " ORDER BY updated DESC,id", (engagement["id"],)).fetchall()
         names, urls, live = [], [], []
         for rule in engagement["scope"]:
             if "*." in rule:
@@ -49,15 +62,13 @@ class WorkflowMixin:
                 urls.append(url)
             except ValueError:
                 continue
-        for asset in assets:
+        for value, code in assets:
             try:
-                url, name, _ = target_url(asset["value"], engagement)
+                url, name, _ = target_url(value, engagement)
                 if not allowed(name, engagement):
                     continue
                 names.append(name)
                 urls.append(url)
-                detail = asset.get("detail")
-                code = response_status(detail) if isinstance(detail, dict) else None
                 if code and (200 <= code < 400 or code in (401, 403)):
                     live.append(url)
             except ValueError:
@@ -88,10 +99,14 @@ class WorkflowMixin:
         discovery = payload.get("discovery", "ffuf")
         if discovery not in ("ffuf", "feroxbuster"):
             raise ValueError("Choose ffuf or feroxbuster for path discovery")
-        maximum = int(payload.get("max_jobs", 200))
-        target_limit = int(payload.get("max_targets", 50))
-        if not 1 <= maximum <= 500 or not 1 <= target_limit <= 200:
-            raise ValueError("Use 1–500 total jobs and 1–200 targets per stage")
+        def optional_limit(name):
+            value = payload.get(name)
+            if value is None or value == "":
+                return None
+            if isinstance(value, bool) or not str(value).isascii() or not str(value).isdigit():
+                raise ValueError("Job and target limits must be whole numbers; leave blank or use 0 for unlimited")
+            return int(value) or None
+        maximum, target_limit = optional_limit("max_jobs"), optional_limit("max_targets")
         available = {t["name"]: bool(t.get("runnable", t["installed"] and t["adapter"])) for t in self.tools()}
         auth_id = payload.get("auth_id") or None
         auth = self.get("auth", auth_id) if auth_id else None
@@ -144,6 +159,55 @@ class WorkflowMixin:
             self.notify_result("workflow", workflow)
             return workflow
 
+    def resume_workflow(self, key):
+        """Resume a stopped checkpoint without replaying completed stages."""
+        with self.lock:
+            workflow = self.get("workflow", key)
+            if workflow["status"] not in ("failed", "cancelled", "interrupted", "blocked", "rate_limited", "timed_out"):
+                raise ValueError("Only a stopped workflow can be resumed")
+            engagement = self.get("engagement", workflow["engagement_id"])
+            current_hash = hashlib.sha256(json.dumps(engagement, sort_keys=True).encode()).hexdigest()
+            if current_hash != workflow.get("scope_hash"):
+                raise ValueError("Engagement scope or settings changed; preview a new workflow")
+            if workflow.get("auth_id"):
+                auth = self.get("auth", workflow["auth_id"])
+                if auth.get("revision", auth["updated"]) != workflow["auth_revision"]:
+                    raise ValueError("Session changed; preview a new workflow")
+            if any(w["engagement_id"] == engagement["id"] and w["status"] in ACTIVE for w in self.all("workflow")):
+                raise ValueError("This engagement already has an active workflow")
+            if any(j.get("workflow_id") == key and j["status"] in ("queued", "running", "cancelling") for j in self.all("job")):
+                raise ValueError("Wait for the previous tool process to stop before resuming")
+            if workflow["stage_index"] >= len(workflow["stages"]) or (workflow.get("max_jobs") and len(workflow["job_ids"]) >= workflow["max_jobs"]):
+                raise ValueError("Workflow run limit reached; preview a new workflow")
+            stage = workflow["stages"][workflow["stage_index"]]
+            tools = {t["name"]: t.get("runnable", t.get("installed") and t.get("adapter")) for t in self.tools()}
+            if not tools.get(stage["tool"]):
+                raise ValueError(f"Install or configure {stage['tool']} before resuming")
+            candidate = workflow.get("stopped_job") or workflow.get("active_job") or (workflow["job_ids"][-1] if workflow["job_ids"] else None)
+            job = self.get("job", candidate) if candidate else None
+            if job and job.get("workflow_id") != key:
+                raise ValueError("Workflow checkpoint belongs to another workflow")
+            retry = job and job.get("workflow_stage") == workflow["stage_index"] + 1 and (job["status"] != "completed" or job.get("processing_error"))
+            if retry or workflow.get("pending_target"):
+                target = job["target"] if retry else workflow["pending_target"]
+                cursor = stage.get("cursor", 0)
+                if not cursor or self.stage_target(workflow, stage, cursor - 1) != target:
+                    raise ValueError("Workflow checkpoint is incomplete; preview a new workflow")
+                if workflow.get("max_targets") and stage.get("launched", 0) >= workflow["max_targets"]:
+                    raise ValueError("Stage run limit reached; preview a new workflow")
+                stage["cursor"] -= 1
+                if retry:
+                    run_key = self.historical_run_key(job)
+                    workflow["seen"] = [seen for seen in workflow["seen"] if seen != run_key]
+                workflow["retry_target"] = target
+            for remaining in workflow["stages"][workflow["stage_index"]:]:
+                remaining["available"] = bool(tools.get(remaining["tool"]))
+            workflow.update(status="queued", active_job=None, error=None, resumed=stamp(), resume_count=workflow.get("resume_count", 0) + 1)
+            for field in ("finished", "stopped_job", "pending_target"):
+                workflow.pop(field, None)
+            self.activity(workflow, "resumed", f"Resuming stage {workflow['stage_index'] + 1}; completed stages remain cached and original run limits still apply")
+            return self.put("workflow", workflow)
+
     def advance_workflows(self):
         with self.lock:
             for workflow in self.all("workflow"):
@@ -169,9 +233,10 @@ class WorkflowMixin:
                 return
             workflow["active_job"] = None
             if job["status"] != "completed" or job.get("processing_error"):
+                workflow["stopped_job"] = job["id"]
                 outcome = "blocked" if job["status"] in ("blocked", "rate_limited") else job["status"] if job["status"] in ("cancelled", "interrupted") else "failed"
                 workflow.update(status=outcome, finished=stamp(),
-                                error=f"{job['tool']} stopped with {job['status']}; review its log before continuing")
+                                error=f"Stage {workflow['stage_index'] + 1}: {job['tool']} stopped with {job['status']} (exit {job.get('returncode')}, job {job['id']}); review its log before continuing")
                 self.activity(workflow, workflow["status"], workflow["error"])
                 self.put("workflow", workflow)
                 self.notify_result("workflow", workflow)
@@ -183,15 +248,15 @@ class WorkflowMixin:
                 self.activity(workflow, workflow["status"], "Workflow ended; review stage coverage and observations. This does not establish a vulnerability.")
                 break
             stage = workflow["stages"][workflow["stage_index"]]
-            if "targets" not in stage:
+            if "targets" in stage:  # Move legacy candidate arrays out of workflow JSON.
+                targets = stage.pop("targets")
+                self.db.executemany("INSERT OR REPLACE INTO workflow_targets VALUES (?,?,?,?)", ((workflow["id"], workflow["stage_index"], i, t) for i, t in enumerate(targets)))
+                stage["target_count"] = len(targets)
+            if "target_count" not in stage:
                 self.activity(workflow, "stage", f"Stage {workflow['stage_index'] + 1}: {stage['title']} ({stage['tool']})")
                 targets = self.workflow_targets(engagement, stage["source"]) if stage["available"] else []
-                if len(targets) > 2000:
-                    workflow["limited"] = True
-                    stage["candidate_limit"] = True
-                    self.activity(workflow, "limited", "Candidate list capped at 2000 targets for this stage")
-                    targets = targets[:2000]
-                stage.update(targets=targets, target_count=len(targets), cursor=0, skipped=0, launched=0)
+                self.db.executemany("INSERT OR REPLACE INTO workflow_targets VALUES (?,?,?,?)", ((workflow["id"], workflow["stage_index"], i, t) for i, t in enumerate(targets)))
+                stage.update(target_count=len(targets), cursor=0, skipped=0, launched=0)
                 if not stage["available"]:
                     workflow["limited"] = True
                     stage["reason"] = "Tool unavailable; stage skipped"
@@ -199,45 +264,50 @@ class WorkflowMixin:
                     stage["reason"] = "No eligible targets from scope or cached observations"
                 if stage.get("reason"):
                     self.activity(workflow, "skipped", stage["reason"])
-            if stage["cursor"] >= len(stage["targets"]):
+            if stage["cursor"] >= stage["target_count"]:
                 stage["status"] = "skipped" if stage.get("reason") else "limited" if stage.get("candidate_limit") else "completed"
                 stage.pop("targets", None)
                 workflow["stage_index"] += 1
                 continue
-            target = stage["targets"][stage["cursor"]]
+            target = self.stage_target(workflow, stage, stage["cursor"])
+            if target is None:
+                raise ValueError("Workflow target checkpoint is missing; preview a new workflow")
             stage["cursor"] += 1
             payload = dict(engagement_id=engagement["id"], tool=stage["tool"], target=target,
-                           diagnostics=True, allow_repeat=workflow["allow_repeat"])
+                           diagnostics=True, allow_repeat=workflow["allow_repeat"] or workflow.get("retry_target") == target)
             if auth and stage["tool"] in HTTP_TOOLS:
                 parsed, bound = urlsplit(target), urlsplit(auth["origin"])
                 if (parsed.scheme, parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80)) == (bound.scheme, bound.hostname, bound.port or (443 if bound.scheme == "https" else 80)):
                     payload["auth_id"] = auth["id"]
             run_key = self.run_key(payload)
-            completed = any(r["id"] == run_key for r in self.all("completed_run"))
-            old_jobs = [j for j in self.all("job") if self.historical_run_key(j) == run_key]
+            completed = self.has_completed_run(run_key)
+            old_jobs = self.matching_jobs(run_key)
             completed = completed or any(j["status"] == "completed" for j in old_jobs)
-            if run_key in workflow["seen"] or (completed and not workflow["allow_repeat"]):
+            if run_key in workflow["seen"] or (completed and not payload["allow_repeat"]):
                 stage["skipped"] += 1
                 self.activity(workflow, "cached", f"Reused {stage['tool']} result for {target}; no duplicate request")
                 continue
             if any(j["status"] in ("queued", "running", "cancelling") for j in old_jobs):
                 stage["cursor"] -= 1
                 break  # Wait for the existing job, then reuse its results.
-            if len(workflow["job_ids"]) >= workflow["max_jobs"]:
+            if workflow.get("max_jobs") and len(workflow["job_ids"]) >= workflow["max_jobs"]:
                 workflow.update(status="completed_limited", limited=True, finished=stamp())
                 self.activity(workflow, "limited", "Total job limit reached; remaining targets/stages were not executed")
                 break
-            if stage["launched"] >= workflow["max_targets"]:
+            if workflow.get("max_targets") and stage["launched"] >= workflow["max_targets"]:
                 stage.update(reason="Stage target limit reached; remaining targets were not executed", status="limited")
                 workflow["limited"] = True
                 self.activity(workflow, "limited", stage["reason"])
                 stage.pop("targets", None)
                 workflow["stage_index"] += 1
                 continue
-            if len([j for j in self.all("job") if j["status"] in ("queued", "running", "cancelling")]) >= 20:
+            if self.pending_job_count() >= 20:
                 stage["cursor"] -= 1
                 break
+            workflow["pending_target"] = target
             job = self.enqueue(payload)
+            workflow.pop("pending_target", None)
+            workflow.pop("retry_target", None)
             job.update(workflow_id=workflow["id"], workflow_stage=workflow["stage_index"] + 1, stage_title=stage["title"])
             for event in job.get("activity", []):
                 if event["phase"] == "queued":

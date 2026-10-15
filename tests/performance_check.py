@@ -25,7 +25,10 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--max-rss-mb", type=float, default=256)
     parser.add_argument("--max-p95-ms", type=float, default=500)
+    parser.add_argument("--assets", type=int, default=1000, help="Synthetic asset count (1–100000)")
     args = parser.parse_args()
+    if not 1 <= args.assets <= 100000:
+        parser.error("--assets must be between 1 and 100000")
     with tempfile.TemporaryDirectory(prefix="kiroshi-performance-") as directory:
         data = Path(directory)
         server = subprocess.Popen([sys.executable, "-u", "-m", "dashboard.server", "--port", "0", "--data-dir", str(data)], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -45,9 +48,9 @@ def main():
                 log = data / "jobs" / key / "output.log"
                 log.parent.mkdir(parents=True)
                 log.write_text("local fixture observation\n" * 40)
-            for number in range(1000):
+            for number in range(args.assets):
                 key = f"asset-{number}"
-                asset = dict(id=key, engagement_id="fixture", value=f"http://127.0.0.1/path/{number}", tool="httpx", identity="Anonymous", job_ids=["fixture-0000"], detail={"status_code": 200})
+                asset = dict(id=key, engagement_id="fixture", value=f"http://127.0.0.1/path/{number}", tool="httpx", identity="Anonymous", job_ids=["fixture-0000"], detail={"status_code": 200, "body": "local evidence fixture " * 30})
                 records.append(("asset", key, json.dumps(asset)))
             connection = sqlite3.connect(data / "kiroshi.sqlite3")
             try:
@@ -62,10 +65,15 @@ def main():
                     body = response.read()
                 return (time.perf_counter()-begin)*1000, len(body), body
 
-            request("/api/state")  # Warm tool discovery separately from normal polling.
+            state = json.loads(request("/api/state")[2])  # Warm tool discovery and imported asset index.
+            assert state["asset_counts"]["total"] == args.assets
+            assert len(state["assets"]) <= 10
+            assets = json.loads(request("/api/assets?limit=50")[2])
+            assert assets["total"] == args.assets and len(assets["items"]) <= 50
+            assert "local evidence fixture" not in json.dumps(assets)
             before = json.loads(request("/api/performance")[2])
             first = process_sample(server.pid)
-            paths = ["/api/state", "/api/performance", "/api/jobs/fixture-0000/log"] * 30
+            paths = ["/api/state", "/api/performance", "/api/jobs/fixture-0000/log", "/api/assets?limit=50", "/api/assets?limit=50&q=path%2F12"] * 18
             started = time.perf_counter()
             with ThreadPoolExecutor(max_workers=4) as pool:
                 results = list(pool.map(request, paths))
@@ -75,7 +83,7 @@ def main():
             latencies = sorted(result[0] for result in results)
             peak = last["peak_rss_bytes"] / 1048576
             p95 = latencies[math.ceil(len(latencies)*.95)-1]
-            report = dict(recorded_at=stamp, fixture=dict(jobs=200, assets=1000, requests=len(paths), concurrency=4, network="loopback only; no scanners or notifications executed"),
+            report = dict(recorded_at=stamp, fixture=dict(jobs=200, assets=args.assets, asset_page_size=50, requests=len(paths), concurrency=4, network="loopback only; no scanners or notifications executed"),
                           latency_ms=dict(median=round(statistics.median(latencies), 2), p95=round(p95, 2), maximum=round(max(latencies), 2)),
                           duration_seconds=round(duration, 2), backend_peak_rss_mb=round(peak, 2), backend_rss_mb=after["rss_mb"],
                           backend_cpu_seconds=round(last["cpu_seconds"]-first["cpu_seconds"], 3), open_fds_before=before["open_fds"], open_fds_after=after["open_fds"],
