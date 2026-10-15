@@ -1309,3 +1309,62 @@ main,
   background: #b4ebf612;
   border-radius: 6px;
 }
+
+.busy-spinner {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  border: 2px solid #b4ebf638;
+  border-top-color: #b4ebf6;
+  border-radius: 50%;
+  animation: request-spin 0.8s linear infinite;
+  vertical-align: middle;
+}
+.btn .busy-spinner {
+  margin-right: 8px;
+}
+.request-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #b4ebf609;
+}
+.request-progress p {
+  margin: 3px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+[aria-busy="true"] .form-actions {
+  opacity: 0.8;
+}
+@keyframes request-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .busy-spinner {
+    animation: none;
+    border-right-color: #b4ebf6;
+  }
+}
+
+.notification-events {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+#notification-form > label {
+  margin-top: 12px;
+}
+#notification-status {
+  color: var(--accent);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}

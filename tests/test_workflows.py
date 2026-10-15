@@ -153,6 +153,42 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("session changed", result["error"])
         self.assertEqual(result["job_ids"], [])
 
+    def test_completion_notification_is_local_and_contains_only_a_summary(self):
+        from http.server import ThreadingHTTPServer
+        import threading
+        from tests.test_notifications import Receiver
+        Receiver.seen = []
+        receiver = ThreadingHTTPServer(("127.0.0.1", 0), Receiver)
+        threading.Thread(target=receiver.serve_forever, daemon=True).start()
+        try:
+            self.app.notifications.save(dict(url=f"http://127.0.0.1:{receiver.server_port}/private", enabled=True))
+            workflow = self.done(self.start(max_jobs=2))
+            deadline = time.monotonic() + 2
+            while not Receiver.seen and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertEqual(len(Receiver.seen), 1)
+            body = Receiver.seen[0][2]
+            self.assertEqual(body["event"], "workflow_completed")
+            self.assertEqual(body["fields"]["Status"], "completed_limited")
+            self.assertIn("limited", body["summary"])
+            self.assertNotIn("argv", body)
+            self.assertNotIn("output", body)
+        finally:
+            self.app.notifications.save(dict(remove=True))
+            receiver.shutdown()
+            receiver.server_close()
+
+    def test_cancelling_the_current_job_cancels_its_workflow(self):
+        with self.app.lock:
+            workflow = self.start()
+            self.app.advance_workflow(workflow)
+            current = self.app.get("workflow", workflow["id"])
+            self.app.cancel(current["active_job"])
+            self.app.advance_workflow(current)
+        result = self.app.get("workflow", workflow["id"])
+        self.assertEqual(result["status"], "cancelled")
+        self.assertEqual(len(result["job_ids"]), 1)
+
     def test_wildcard_seed_is_passive_only(self):
         e = self.app.save_engagement(dict(name="Wildcard fixture", scope="*.wildcard.test", authorized=True))
         self.assertEqual(self.app.workflow_targets(e, "hosts"), [])

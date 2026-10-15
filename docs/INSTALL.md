@@ -105,7 +105,8 @@ go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
 go install github.com/ffuf/ffuf/v2@latest
 ```
 
-These commands download/build third-party software; the installer does not run them.
+These commands download/build third-party software. The launcher installer does not
+run them; the explicit `kiroshi install-tools` command installs missing tools.
 Check the linked maintainer requirements first. Prefer pinned release versions when
 you need reproducible tooling; `@latest` can change adapter compatibility. Install
 Feroxbuster through its documented release/package options or Rust instructions.
@@ -179,3 +180,21 @@ Configuration now uses `KIROSHI_USER_AGENT`, `KIROSHI_H1_API_USERNAME` and
 `KIROSHI_H1_API_TOKEN`. Earlier `HUNT_` environment names remain supported as
 fallbacks, with canonical names taking precedence. Rerun `bash install.sh` to add
 the canonical launcher to this machine.
+
+
+## Install missing workflow tools
+
+```bash
+./kiroshi install-tools --dry-run
+./kiroshi install-tools
+./kiroshi doctor --require-tools
+```
+
+The explicit tool setup command installs only missing workflow adapters into
+`~/.local/bin`, using fixed upstream Go module paths and Cargo for Feroxbuster.
+Existing installed binaries are skipped, not upgraded; incompatible overrides
+require manual review. It refuses to overwrite a file at the destination. A current
+Go toolchain is required for Go builds and Rust/Cargo for Feroxbuster. Missing
+compilers or build dependencies produce a terminal error with the upstream output.
+The helper never runs sudo or edits shell startup files. `install.sh` remains the
+launcher installer; tool downloads happen only with `kiroshi install-tools`.

@@ -93,6 +93,44 @@ function workflowTable(rows) {
     `<div class="table-wrap"><table><thead><tr><th>Engagement</th><th>Stage</th><th>Status</th><th>Tool runs</th><th></th></tr></thead><tbody>${rows.map((w) => `<tr><td>${esc(engagementName(w.engagement_id))}</td><td>${Math.min(w.stage_index + 1, w.stages.length)} / ${w.stages.length}<div class="sub">${esc(w.stages[w.stage_index]?.title || "All stages ended")}</div></td><td>${pill(w.status)}${w.limited ? '<div class="sub">Coverage limited — review skipped targets/stages</div>' : ""}</td><td>${w.job_ids.length} / ${w.max_jobs}</td><td><button class="btn small" data-action="workflow-log" data-id="${w.id}">Live workflow ↗</button></td></tr>`).join("")}</tbody></table></div>`,
   );
 }
+function busyForm(form, message, detail, button) {
+  const controls = [
+    ...form.querySelectorAll("input, select, textarea, button"),
+  ];
+  const disabled = controls.map((control) => control.disabled);
+  const close = $("#modal .dialog-close");
+  const closeDisabled = close?.disabled;
+  const original = button?.innerHTML;
+  form.dataset.busy = "true";
+  form.setAttribute("aria-busy", "true");
+  controls.forEach((control) => (control.disabled = true));
+  if (close) close.disabled = true;
+  if (button)
+    button.innerHTML = `<span class="busy-spinner" aria-hidden="true"></span>${esc(message)}`;
+  const status = document.createElement("div");
+  status.className = "request-progress";
+  status.setAttribute("role", "status");
+  status.innerHTML = `<span class="busy-spinner" aria-hidden="true"></span><div><strong>${esc(message)}</strong><p>${esc(detail)}</p></div>`;
+  form.append(status);
+  return () => {
+    controls.forEach((control, i) => (control.disabled = disabled[i]));
+    if (close?.isConnected) close.disabled = closeDisabled;
+    if (button) button.innerHTML = original;
+    delete form.dataset.busy;
+    form.removeAttribute("aria-busy");
+    status.remove();
+  };
+}
+function eraseHistoryModal() {
+  const engagementId = selected;
+  const jobs = filtered(state.jobs).length;
+  const workflows = filtered(state.workflows || []).length;
+  modal(
+    "Erase jobs & logs?",
+    "This permanently removes execution history and log files for the selected scope.",
+    `<form id="erase-history-form"><input type="hidden" name="engagement_id" value="${esc(engagementId)}"><div class="note neutral"><strong>${engagementId ? esc(engagementName(engagementId)) : "All engagements"}</strong><p>${jobs} jobs · ${workflows} workflow history entries</p></div><p>Engagements, scope, sessions, cached discoveries and findings stay saved. Duplicate-run protection and traffic holds stay in place.</p><p class="help">Active jobs or workflows must be stopped or finished before their history can be erased.</p><div class="inline-error" id="form-error"></div><div class="form-actions"><button type="button" class="btn" data-action="close">Cancel</button><button class="btn danger" id="erase-history-confirm">Erase jobs & logs</button></div></form>`,
+  );
+}
 function workflowForm(id) {
   const engagement =
     state.engagements.find((e) => e.id === (id || selected)) ||
@@ -116,7 +154,7 @@ async function workflowModal(id) {
   modal(
     "Live engagement workflow",
     "Sequential stages · tool output updates every second. Scope, session, rate and duplicate checks apply to every job.",
-    '<div id="workflow-meta"></div><div id="job-meta" aria-live="polite"></div><div id="job-activity"></div><label>TOOL OUTPUT</label><pre class="terminal" id="job-output">Waiting for the first stage…</pre>',
+    '<div id="workflow-meta"><div class="request-progress" role="status"><span class="busy-spinner" aria-hidden="true"></span>Connecting to workflow activity…</div></div><div id="job-meta" aria-live="polite"></div><div id="job-activity"></div><label>TOOL OUTPUT</label><pre class="terminal" id="job-output">Waiting for the first stage…</pre>',
   );
   activeWorkflow = id;
   await updateWorkflow();
@@ -130,7 +168,7 @@ async function updateWorkflow() {
     (d) => d.open,
   );
   $("#workflow-meta").innerHTML =
-    `<div class="row spread"><h3>${esc(engagementName(w.engagement_id))} · ${pill(w.status)}</h3>${["queued", "running"].includes(w.status) ? `<button class="btn small danger" data-action="workflow-cancel" data-id="${w.id}">Stop workflow</button>` : ""}</div><p>${w.job_ids.length} tool jobs launched · maximum ${w.max_jobs}. ${w.limited ? "Coverage limited: review skipped stages and limits." : ""}</p>${w.error ? `<div class="note neutral">${esc(w.error)}</div>` : ""}<p><strong>Stage ${Math.min(w.stage_index + 1, w.stages.length)} / ${w.stages.length}: ${esc(w.stages[w.stage_index]?.title || "All stages ended")}</strong></p><details><summary>Ordered stages</summary><ol class="workflow-stages">${w.stages.map((stage, i) => `<li class="${i === w.stage_index ? "current-stage" : ""}"><strong>${esc(stage.tool)}</strong> · ${esc(stage.title)}<span class="sub">${esc(stage.status || (["queued", "running"].includes(w.status) ? (i === w.stage_index ? w.status : "pending") : "not executed"))} · ${stage.launched || 0} launched · ${stage.skipped || 0} cached/reused${stage.reason ? " · " + esc(stage.reason) : ""}</span></li>`).join("")}</ol></details><details><summary>Workflow activity</summary>${(w.activity || []).map((a) => `<p class="help">${esc(new Date(a.at).toLocaleTimeString())} · ${esc(a.message)}</p>`).join("")}</details>`;
+    `<div class="row spread"><h3>${esc(engagementName(w.engagement_id))} · ${pill(w.status)} ${["queued", "running"].includes(w.status) ? '<span class="busy-spinner" aria-label="Workflow active"></span>' : ""}</h3>${["queued", "running"].includes(w.status) ? `<button class="btn small danger" data-action="workflow-cancel" data-id="${w.id}">Stop workflow</button>` : ""}</div><p>${w.job_ids.length} tool jobs launched · maximum ${w.max_jobs}. ${w.limited ? "Coverage limited: review skipped stages and limits." : ""}</p>${w.error ? `<div class="note neutral">${esc(w.error)}</div>` : ""}<p><strong>Stage ${Math.min(w.stage_index + 1, w.stages.length)} / ${w.stages.length}: ${esc(w.stages[w.stage_index]?.title || "All stages ended")}</strong></p><details><summary>Ordered stages</summary><ol class="workflow-stages">${w.stages.map((stage, i) => `<li class="${i === w.stage_index ? "current-stage" : ""}"><strong>${esc(stage.tool)}</strong> · ${esc(stage.title)}<span class="sub">${esc(stage.status || (["queued", "running"].includes(w.status) ? (i === w.stage_index ? w.status : "pending") : "not executed"))} · ${stage.launched || 0} launched · ${stage.skipped || 0} cached/reused${stage.reason ? " · " + esc(stage.reason) : ""}</span></li>`).join("")}</ol></details><details><summary>Workflow activity</summary>${(w.activity || []).map((a) => `<p class="help">${esc(new Date(a.at).toLocaleTimeString())} · ${esc(a.message)}</p>`).join("")}</details>`;
   $("#workflow-meta")
     .querySelectorAll("details")
     .forEach((d, i) => {
@@ -149,6 +187,39 @@ function jobTable(jobs) {
       "Create an engagement, preview a command, then queue your first run.",
     );
   return `<div class="table-wrap"><table><thead><tr><th>Tool / target</th><th>Engagement</th><th>Identity</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>${jobs.map((j) => `<tr><td><strong class="mono">${esc(j.tool)}</strong>${j.workflow_id ? `<div class="sub">Stage ${j.workflow_stage} · ${esc(j.stage_title)}</div>` : ""}<div class="sub path">${esc(j.target)}</div></td><td>${esc(engagementName(j.engagement_id))}</td><td>${esc(j.identity || "Anonymous")}</td><td>${pill(j.status)}<div class="sub">${j.elapsed_seconds || 0}s · ${j.log_bytes || 0} output bytes</div>${j.result_summary ? `<div class="sub">${esc(j.result_summary)}</div>` : ""}${j.waiting_for ? `<div class="sub">${j.manual_hold ? "Manual traffic hold" : "Waiting for cooldown"}</div>` : ""}</td><td class="text-muted">${when(j.created)}</td><td><button class="btn small" data-action="log" data-id="${j.id}">Logs ↗</button></td></tr>`).join("")}</tbody></table></div>`;
+}
+function notificationPayload(form) {
+  return {
+    url: form.elements.url.value,
+    enabled: form.elements.enabled.checked,
+    events: [...form.querySelectorAll('[name="events"]:checked')].map(
+      (e) => e.value,
+    ),
+  };
+}
+function notificationSettings() {
+  const n = state.notifications || {};
+  const events = n.configured
+    ? n.events
+    : ["workflow_completed", "workflow_stopped"];
+  return `<form id="notification-form"><div class="row spread"><strong>${n.configured ? esc(n.platform.toUpperCase()) + " · " + esc(n.host) : "Connect a webhook"}</strong>${n.configured ? pill(n.enabled ? "enabled" : "disabled") : ""}</div><label for="webhook-url">Webhook URL</label><input id="webhook-url" name="url" type="password" autocomplete="off" spellcheck="false" maxlength="4096" placeholder="${n.configured ? "Saved privately — paste a URL to replace" : "Paste a Discord, Telegram, Slack or generic webhook URL"}"><p class="help">Platform detected from the URL. Telegram: https://api.telegram.org/botTOKEN/sendMessage?chat_id=CHAT_ID (optional message_thread_id). Saved URLs and tokens are never returned to the browser.</p><label class="check-label"><input type="checkbox" name="enabled" ${!n.configured || n.enabled ? "checked" : ""}>Enable automatic notifications</label><div class="notification-events">${[
+    ["workflow_completed", "Workflow finishes"],
+    ["workflow_stopped", "Workflow fails or stops"],
+    ["job_completed", "Individual tool finishes"],
+    ["job_stopped", "Individual tool fails or stops"],
+  ]
+    .map(
+      ([value, label]) =>
+        `<label class="check-label"><input type="checkbox" name="events" value="${value}" ${events?.includes(value) ? "checked" : ""}>${label}</label>`,
+    )
+    .join(
+      "",
+    )}</div><p class="help">Notifications contain an execution summary. Session credentials and raw scan logs are excluded.</p><div id="notification-status" role="status">${n.last_delivery ? esc(n.last_delivery.status === "sent" ? "Last notification delivered" : n.last_delivery.error) : ""}</div><div class="form-actions"><button class="btn primary">Save webhook</button><button type="button" class="btn" data-action="test-notification" ${n.configured ? "" : "disabled"}>Send test notification</button>${n.configured ? '<button type="button" class="btn danger" data-action="remove-notification">Remove webhook</button>' : ""}</div></form>`;
+}
+function performanceSummary(p) {
+  if (!p?.available)
+    return '<p class="help">Live resource metrics require Linux / WSL.</p>';
+  return `<div class="metric-line"><span>Dashboard memory (RSS)</span><strong>${p.rss_mb} MB</strong></div><div class="metric-line"><span>Peak dashboard memory</span><strong>${p.peak_rss_mb ?? p.rss_mb} MB</strong></div><div class="metric-line"><span>CPU time since startup</span><strong>${p.cpu_seconds}s</strong></div><div class="metric-line"><span>Threads / open files</span><strong>${p.threads} / ${p.open_fds ?? "—"}</strong></div><div class="metric-line"><span>Disk reads / writes</span><strong>${p.read_mb} / ${p.write_mb} MB</strong></div><div class="metric-line"><span>Notification queue</span><strong>${p.notification_queue || 0}</strong></div><p class="help">Backend snapshot. Scanner memory and CPU appear in each job's live logs. Browser memory is separate.</p>`;
 }
 function overview() {
   const installed = state.tools.filter((t) => t.installed),
@@ -203,7 +274,7 @@ function overview() {
         .join(
           "",
         )}</div><button class="btn" data-view="tools">Manage toolchain ↗</button></div>`,
-    )}${panel("Working model", `<div class="panel-body"><div class="activity-item"><span class="activity-dot"></span><div><h3>01 / Set the boundary</h3><p>Explicit hosts and exclusions. Policy URL stays separate.</p></div></div><div class="activity-item"><span class="activity-dot"></span><div><h3>02 / Collect & cache</h3><p>Anonymous discovery, live job logs and retained evidence.</p></div></div><div class="activity-item"><span class="activity-dot"></span><div><h3>03 / Add context</h3><p>Scoped session headers, named identities and agent handoffs.</p></div></div></div>`)}</div></div><div class="page-bottom">KIROSHI / LOCAL WORKSPACE · Original scaffold by 0xcucumbersalad · Dashboard extension</div>`
+    )}${panel("Working model", `<div class="panel-body"><div class="activity-item"><span class="activity-dot"></span><div><h3>01 / Set the boundary</h3><p>Explicit hosts and exclusions. Policy URL stays separate.</p></div></div><div class="activity-item"><span class="activity-dot"></span><div><h3>02 / Collect & cache</h3><p>Anonymous discovery, live job logs and retained evidence.</p></div></div><div class="activity-item"><span class="activity-dot"></span><div><h3>03 / Add context</h3><p>Scoped session headers, named identities and agent handoffs.</p></div></div></div>`)}</div></div><div class="grid-two">${panel("Notifications", `<div id="notification-settings" class="panel-body">${notificationSettings()}</div>`)}${panel("Performance", `<div id="performance-summary" class="panel-body">${performanceSummary(state.performance)}</div>`, '<button class="btn small" data-action="refresh-performance">Refresh metrics</button>')}</div><div class="page-bottom">KIROSHI / LOCAL WORKSPACE · Original scaffold by 0xcucumbersalad · Dashboard extension</div>`
   );
 }
 function engagementTable(rows) {
@@ -272,7 +343,7 @@ function jobsView() {
         ? '<div class="row"><button class="btn" data-action="run">Run one tool</button><button class="btn primary" data-action="workflow">Run engagement workflow</button></div>'
         : "",
     ) +
-    `<div class="toolbar">${engagementFilter()}<span class="text-muted">${state.jobs.filter(pending).length} pending · one worker</span></div>` +
+    `<div class="toolbar">${engagementFilter()}<span class="text-muted">${state.jobs.filter(pending).length} pending · one worker</span><button class="btn danger" data-action="erase-history">Erase jobs & logs</button></div>` +
     trafficHolds() +
     workflowTable(filtered(state.workflows || [])) +
     panel("Execution history", jobTable(filtered(state.jobs)))
@@ -672,6 +743,11 @@ async function updateLog() {
             .join("<br>")}</div>`
         : ""
     }`;
+  if (job.performance?.available)
+    $("#job-meta").insertAdjacentHTML(
+      "beforeend",
+      `<div class="note neutral">Sampled tool peak memory: ${job.performance.peak_rss_mb} MB · CPU time: ${job.performance.cpu_seconds}s${pending(job) ? ` · CPU: ${job.performance.cpu_percent}%` : ""} · read/write: ${job.performance.read_mb}/${job.performance.write_mb} MB · peak processes: ${job.performance.peak_processes}</div>`,
+    );
   if (commandOpen && $("#job-meta details")) $("#job-meta details").open = true;
   const quiet =
     pending(job) && job.status !== "queued"
@@ -734,15 +810,74 @@ document.addEventListener("click", async (event) => {
         await refresh(false);
         await updateWorkflow();
         break;
+      case "refresh-performance": {
+        el.disabled = true;
+        try {
+          state.performance = await api("performance");
+          $("#performance-summary").innerHTML = performanceSummary(
+            state.performance,
+          );
+        } finally {
+          el.disabled = false;
+        }
+        break;
+      }
+      case "remove-notification":
+        state.notifications = await api("notifications", { remove: true });
+        $("#notification-settings").innerHTML = notificationSettings();
+        break;
+      case "test-notification": {
+        const form = $("#notification-form");
+        if (form.dataset.busy || form.dataset.submitting) break;
+        const payload = notificationPayload(form);
+        const restore = busyForm(
+          form,
+          "Sending test…",
+          "Delivering a platform-formatted test notification.",
+          el,
+        );
+        try {
+          if (payload.url.trim())
+            state.notifications = await api("notifications", payload);
+          const result = await api("notifications/test", {});
+          state.notifications = await api("notifications");
+          $("#notification-settings").innerHTML = notificationSettings();
+          $("#notification-status").textContent =
+            `${result.platform.toUpperCase()}: ${result.message}`;
+        } catch (error) {
+          form.querySelector("#notification-status").textContent =
+            error.message;
+        } finally {
+          restore();
+        }
+        break;
+      }
+      case "erase-history":
+        eraseHistoryModal();
+        break;
       case "workflow-preview": {
         const form = $("#workflow-form");
+        if (form.dataset.busy || form.dataset.submitting) break;
         const data = Object.fromEntries(new FormData(form));
         data.allow_repeat = form.elements.allow_repeat.checked;
-        const plan = await api("workflows/preview", data);
-        form.dataset.planToken = plan.plan_token;
-        $("#workflow-preview").innerHTML =
-          `<p>${plan.initial_hosts} scoped seed hosts · ${plan.passive_seeds} passive seeds · up to ${plan.max_targets} new targets/stage · ${plan.max_jobs} total jobs</p><ol>${plan.stages.map((stage) => `<li><strong>${esc(stage.tool)}</strong> · ${esc(stage.title)} ${stage.available ? "" : "(unavailable — will be skipped)"}</li>`).join("")}</ol><p class="help">${esc(plan.notice)}</p>`;
-        $("#workflow-start").disabled = false;
+        delete form.dataset.planToken;
+        const restore = busyForm(
+          form,
+          "Preparing workflow…",
+          "Reading scope, checking tools and building the ordered stage plan.",
+          el,
+        );
+        try {
+          const plan = await api("workflows/preview", data);
+          form.dataset.planToken = plan.plan_token;
+          $("#workflow-preview").innerHTML =
+            `<p>${plan.initial_hosts} scoped seed hosts · ${plan.passive_seeds} passive seeds · up to ${plan.max_targets} new targets/stage · ${plan.max_jobs} total jobs</p><ol>${plan.stages.map((stage) => `<li><strong>${esc(stage.tool)}</strong> · ${esc(stage.title)} ${stage.available ? "" : "(unavailable — will be skipped)"}</li>`).join("")}</ol><p class="help">${esc(plan.notice)}</p>`;
+          $("#form-error").textContent = "";
+        } finally {
+          restore();
+          if (form.isConnected)
+            $("#workflow-start").disabled = !form.dataset.planToken;
+        }
         break;
       }
       case "run":
@@ -885,13 +1020,48 @@ document.addEventListener("click", async (event) => {
 document.addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.target;
-  if (form.dataset.submitting) return;
+  if (form.dataset.submitting || form.dataset.busy) return;
   form.dataset.submitting = "true";
   const data = Object.fromEntries(new FormData(form));
+  let restoreBusy = () => {};
   try {
-    if (form.getAttribute("id") === "workflow-form") {
+    if (form.getAttribute("id") === "notification-form") {
+      const payload = notificationPayload(form);
+      restoreBusy = busyForm(
+        form,
+        "Saving webhook…",
+        "Detecting the platform and saving private notification settings.",
+        form.querySelector("button.btn.primary"),
+      );
+      state.notifications = await api("notifications", payload);
+      $("#notification-settings").innerHTML = notificationSettings();
+      $("#notification-status").textContent =
+        "Webhook settings saved. Send a test to verify delivery.";
+      return;
+    } else if (form.getAttribute("id") === "erase-history-form") {
+      data.confirmed = true;
+      restoreBusy = busyForm(
+        form,
+        "Erasing history…",
+        "Removing completed execution records and their log files.",
+        $("#erase-history-confirm"),
+      );
+      const result = await api("jobs/erase", data);
+      closeModal();
+      await refresh();
+      toast(
+        `Erased ${result.jobs_deleted} jobs and ${result.workflows_deleted} workflow history entries`,
+      );
+      return;
+    } else if (form.getAttribute("id") === "workflow-form") {
       data.allow_repeat = form.elements.allow_repeat.checked;
       data.plan_token = form.dataset.planToken || "";
+      restoreBusy = busyForm(
+        form,
+        "Starting workflow…",
+        "Submitting the validated plan and opening live tool activity.",
+        $("#workflow-start"),
+      );
       const workflow = await api("workflows", data);
       selected = data.engagement_id;
       view = "jobs";
@@ -988,12 +1158,19 @@ document.addEventListener("submit", async (event) => {
     await refresh();
     toast("Saved locally");
   } catch (error) {
-    $("#form-error").textContent = error.message;
+    if (form.isConnected && form.id === "notification-form")
+      form.querySelector("#notification-status").textContent = error.message;
+    else if (form.isConnected && form.querySelector("#form-error"))
+      form.querySelector("#form-error").textContent = error.message;
+    else toast(error.message, true);
   } finally {
+    restoreBusy();
     delete form.dataset.submitting;
   }
 });
 document.addEventListener("change", (event) => {
+  if (event.target.closest("#notification-form"))
+    event.target.closest("form").dataset.dirty = "true";
   if (event.target.closest("#workflow-form")) {
     delete $("#workflow-form").dataset.planToken;
     $("#workflow-start").disabled = true;
@@ -1011,6 +1188,12 @@ document.addEventListener("change", (event) => {
   if (event.target.id === "tool-filter") filterTools();
 });
 document.addEventListener("input", (event) => {
+  if (event.target.closest("#notification-form")) {
+    const form = event.target.closest("form");
+    form.dataset.dirty = "true";
+    form.querySelector('[data-action="test-notification"]').disabled =
+      !form.elements.url.value.trim() && !state.notifications?.configured;
+  }
   if (event.target.id === "reference-search") filterReferences();
   if (event.target.id === "asset-search")
     $("#asset-table").innerHTML = assetTable(
@@ -1039,6 +1222,9 @@ function filterTools() {
 $("#refresh").addEventListener("click", () =>
   refresh().catch((e) => toast(e.message, true)),
 );
+$("#modal").addEventListener("cancel", (event) => {
+  if ($("#modal form[aria-busy=true]")) event.preventDefault();
+});
 $("#modal").addEventListener("close", () => {
   activeLog = null;
   activeWorkflow = null;
@@ -1056,7 +1242,13 @@ setInterval(async () => {
       )
     ) {
       await refresh(false);
-      if (!$("#modal").open && ["overview", "jobs"].includes(view)) render();
+      if (
+        !$("#modal").open &&
+        ["overview", "jobs"].includes(view) &&
+        !$("#notification-form")?.dataset.dirty &&
+        !$("#notification-form")?.dataset.busy
+      )
+        render();
     }
   } catch (error) {
     toast(error.message, true);

@@ -11,6 +11,7 @@ import queue
 import re
 import secrets
 import shlex
+import shutil
 import signal
 import sqlite3
 import subprocess
@@ -26,6 +27,8 @@ from .http_identity import browser_user_agent
 from .traffic import Feedback, effective, normalize as normalize_traffic, HTTP_TOOLS, response_status
 from .config import default_data_dir, database_path
 from .workflows import WorkflowMixin, ACTIVE as ACTIVE_WORKFLOWS
+from .notifications import Notifications
+from .performance import dashboard_metrics, ProcessMonitor
 
 MAX_LOG = 10 * 1024 * 1024
 
@@ -75,6 +78,8 @@ class App(WorkflowMixin):
         self.stop = threading.Event()
         self.process = None
         self.current = None
+        self.monitor = None
+        self.notifications = Notifications(self.data)
         self.collector = Collector()
         self.tool_cache = None
         for job in self.all("job"):
@@ -109,6 +114,26 @@ class App(WorkflowMixin):
             self.db.execute("INSERT OR REPLACE INTO records VALUES (?,?,?)", (kind, value["id"], json.dumps(value)))
             self.db.commit()
         return value
+
+    def performance(self):
+        return {**dashboard_metrics(), "pending_jobs": self.jobs.qsize(), "notification_queue": self.notifications.queue.qsize()}
+
+    def notify_result(self, kind, record):
+        if not self.notifications.public()["configured"]:
+            return
+        completed = record["status"] in ("completed", "completed_limited")
+        event = f"{kind}_{'completed' if completed else 'stopped'}"
+        engagement = self.get("engagement", record["engagement_id"])
+        body = dict(id=f"{kind}:{record['id']}:{record['status']}", event=event,
+                    title=f"{kind.title()} {'finished' if completed else 'stopped'}", engagement=engagement["name"], status=record["status"],
+                    summary="Execution ended; review observations and scope coverage before reporting.")
+        if kind == "workflow":
+            body.update(stage=f"{min(record['stage_index'] + 1, len(record['stages']))}/{len(record['stages'])}", jobs=len(record["job_ids"]))
+            if record.get("limited"):
+                body["summary"] = "Coverage was limited by configured bounds or unavailable tools. Review skipped stages."
+        else:
+            body.update(tool=record["tool"], target=origin_of(record["target"] if "://" in record["target"] else "https://" + record["target"]), duration=f"{self.job_view(record)['elapsed_seconds']}s")
+        self.notifications.enqueue(body)
 
     def settings(self):
         try:
@@ -542,9 +567,36 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
         result["elapsed_seconds"] = round(max(0, (finished or clock) - started), 1) if started else 0
         result["log_bytes"] = stat.st_size if stat else 0
         result["quiet_seconds"] = round(max(0, (finished or clock) - stat.st_mtime), 1) if stat and stat.st_size else result["elapsed_seconds"]
+        if self.current == job["id"] and self.monitor:
+            result["performance"] = self.monitor.snapshot()
         result["execution_notice"] = (f"Workflow stage {job['workflow_stage']}: {job['stage_title']}. Later stages run sequentially."
                                       if job.get("workflow_id") else "One tool on one target; this is not a full engagement scan.")
         return result
+
+    @synchronized
+    def erase_history(self, payload):
+        if payload.get("confirmed") is not True:
+            raise ValueError("Confirm erasing jobs and logs before continuing")
+        engagement_id = payload.get("engagement_id") or None
+        if engagement_id:
+            self.get("engagement", engagement_id)
+        selected = lambda record: not engagement_id or record["engagement_id"] == engagement_id
+        jobs = [job for job in self.all("job") if selected(job)]
+        workflows = [workflow for workflow in self.all("workflow") if selected(workflow)]
+        if any(job["status"] in ("queued", "running", "cancelling") for job in jobs) or any(w["status"] in ACTIVE_WORKFLOWS for w in workflows):
+            raise ValueError("Stop or wait for active jobs and workflows before erasing their history")
+        for job in jobs:
+            self.remember_run(job)
+        directories = [self.logpath(job).parent for job in jobs] if engagement_id else [self.data / "jobs"]
+        for directory in directories:
+            if directory.is_symlink():
+                directory.unlink()
+            elif directory.exists():
+                shutil.rmtree(directory)
+        self.db.executemany("DELETE FROM records WHERE kind='job' AND id=?", [(j["id"],) for j in jobs])
+        self.db.executemany("DELETE FROM records WHERE kind='workflow' AND id=?", [(w["id"],) for w in workflows])
+        self.db.commit()
+        return dict(ok=True, jobs_deleted=len(jobs), workflows_deleted=len(workflows))
 
     def logpath(self, job):
         return self.data / "jobs" / job["id"] / "output.log"
@@ -562,6 +614,8 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
                 if self.current == key and self.process:
                     self.kill(self.process)
             self.put("job", job)
+            if job["status"] == "cancelled":
+                self.notify_result("job", job)
             return job
 
     @staticmethod
@@ -626,9 +680,13 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
         secret_files = []
         feedback = None
         blocked = None
+        job = {}
         try:
             with self.lock:
-                job = self.get("job", key)
+                try:
+                    job = self.get("job", key)
+                except ValueError:
+                    return  # A cancelled job can be erased before its queued key drains.
                 if job["status"] != "queued":
                     return
                 gate = self.traffic_gate(job)
@@ -690,6 +748,7 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
                                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                            stderr=subprocess.STDOUT, start_new_session=True)
                 self.process, self.current = process, key
+                self.monitor = ProcessMonitor(process.pid)
                 job.update(status="running", started=now(), started_epoch=time.time(), waiting_for=None, not_before=None, manual_hold=False)
                 self.activity(job, "running", f"Started {job['tool']} (PID {process.pid}); maximum duration {job['duration']} seconds")
                 feedback = Feedback(job.get("traffic", effective(self.get("engagement", job["engagement_id"]), {"tool": job["tool"]})))
@@ -740,6 +799,7 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
                     if final:
                         break
             code = process.wait()
+            measured = self.monitor.close() if self.monitor else {}
             timer.cancel()
             process_finished = time.time()
             # Kill any descendants that outlived the main process.
@@ -750,7 +810,7 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
                           "rate_limited" if blocked and blocked["status_code"] == 429 else "blocked" if blocked else
                           "timed_out" if expired.is_set() else "output_limit" if capped.is_set() else
                           "completed" if code == 0 else "failed")
-                job.update(status=status, finished=now(), finished_epoch=process_finished, returncode=code, traffic_events=feedback.events)
+                job.update(status=status, finished=now(), finished_epoch=process_finished, returncode=code, traffic_events=feedback.events, performance=measured)
                 self.activity(job, "processing", f"{job['tool']} exited with code {code}; reading cached observations")
                 if blocked:
                     job["error"] = f"Stopped on HTTP {blocked['status_code']}; review traffic feedback before rerunning"
@@ -766,12 +826,14 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
                     self.put("job", job)
                 self.activity(job, status, job.get("error") or job["result_summary"])
                 self.put("job", job)
+                self.notify_result("job", job)
         except Exception as exc:
             with self.lock:
                 job = self.get("job", key)
                 job.update(status="failed", finished=now(), finished_epoch=time.time(), error=str(exc))
                 self.activity(job, "failed", "Tool execution failed; inspect the error and log")
                 self.put("job", job)
+                self.notify_result("job", job)
         finally:
             for file in secret_files:
                 file.unlink(missing_ok=True)
@@ -783,6 +845,9 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
                 if process.stdout:
                     process.stdout.close()
             with self.lock:
+                if self.monitor:
+                    self.monitor.close()
+                    self.monitor = None
                 self.current = self.process = None
             if job.get("waiting_for"):
                 self.stop.wait(0.25)  # Requeue without starving other origins or busy-spinning.
@@ -890,6 +955,7 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
             if self.process:
                 self.kill(self.process)
         self.worker.join(timeout=5)
+        self.notifications.close()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -939,13 +1005,17 @@ class Handler(BaseHTTPRequestHandler):
             path = urlsplit(self.path).path
             if path == "/api/state":
                 return self.respond(dict(token=self.app.token, engagements=self.app.all("engagement"),
-                                         jobs=[self.app.job_view(j) for j in self.app.all("job")], workflows=[self.app.workflow_view(w) for w in self.app.all("workflow")], findings=[self.app.finding_view(f) for f in self.app.all("finding")],
+                                         notifications=self.app.notifications.public(), performance=self.app.performance(), jobs=[self.app.job_view(j) for j in self.app.all("job")], workflows=[self.app.workflow_view(w) for w in self.app.all("workflow")], findings=[self.app.finding_view(f) for f in self.app.all("finding")],
                                          tools=self.app.tools(), sessions=self.app.all("auth"),
                                          assets=self.app.all("asset"), data_dir=str(self.app.data),
                                          traffic_gates=[g for g in self.app.all("traffic_gate") if g.get("manual_hold") or g.get("until", 0) > time.time()],
                                          references=self.app.all("reference"), review_fields=FIELDS,
                                          reference_search_enabled=self.app.collector.configured(),
                                          http_user_agent=browser_user_agent()))
+            if path == "/api/performance":
+                return self.respond(self.app.performance())
+            if path == "/api/notifications":
+                return self.respond(self.app.notifications.public())
             parts = path.strip("/").split("/")
             if len(parts) == 4 and parts[:2] == ["api", "jobs"] and parts[3] in ("log", "download"):
                 job = self.app.get("job", parts[2])
@@ -986,6 +1056,10 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(payload, dict):
                 raise ValueError("Expected a JSON object")
             path = urlsplit(self.path).path
+            if path == "/api/notifications":
+                return self.respond(self.app.notifications.save(payload))
+            if path == "/api/notifications/test":
+                return self.respond(self.app.notifications.send(dict(event="test", title="Kiroshi is connected", status="test", summary="Test notification received. Your webhook is ready for engagement updates.")))
             if path == "/api/engagements":
                 return self.respond(self.app.save_engagement(payload))
             if path == "/api/workflows/preview":
@@ -1002,6 +1076,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(self.app.delete_auth(payload.get("id")))
             if path == "/api/jobs":
                 return self.respond(self.app.enqueue(payload), 201)
+            if path == "/api/jobs/erase":
+                return self.respond(self.app.erase_history(payload))
             if path == "/api/jobs/cancel":
                 return self.respond(self.app.cancel(payload.get("id")))
             if path == "/api/settings":
@@ -1041,7 +1117,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="kiroshi", description="Kiroshi local WSL dashboard")
+    parser = argparse.ArgumentParser(prog="kiroshi", description="Kiroshi local WSL dashboard", epilog="Tool setup: kiroshi install-tools [--dry-run]. Diagnostics: kiroshi doctor --require-tools.")
     parser.add_argument("--port", type=int, default=8741)
     parser.add_argument("--data-dir", default=str(default_data_dir()))
     args = parser.parse_args()

@@ -140,7 +140,9 @@ class WorkflowMixin:
                 self.cancel(workflow["active_job"])
             workflow.update(status="cancelled", finished=stamp())
             self.activity(workflow, "cancelled", "Workflow cancelled; no further tools will be queued")
-            return self.put("workflow", workflow)
+            self.put("workflow", workflow)
+            self.notify_result("workflow", workflow)
+            return workflow
 
     def advance_workflows(self):
         with self.lock:
@@ -153,6 +155,7 @@ class WorkflowMixin:
                     workflow.update(status="failed", finished=stamp(), error=str(exc))
                     self.activity(workflow, "failed", "Workflow stopped; review its error before restarting")
                     self.put("workflow", workflow)
+                    self.notify_result("workflow", workflow)
 
     def advance_workflow(self, workflow):
         engagement = self.get("engagement", workflow["engagement_id"])
@@ -166,10 +169,12 @@ class WorkflowMixin:
                 return
             workflow["active_job"] = None
             if job["status"] != "completed" or job.get("processing_error"):
-                workflow.update(status="blocked" if job["status"] in ("blocked", "rate_limited") else "failed", finished=stamp(),
+                outcome = "blocked" if job["status"] in ("blocked", "rate_limited") else job["status"] if job["status"] in ("cancelled", "interrupted") else "failed"
+                workflow.update(status=outcome, finished=stamp(),
                                 error=f"{job['tool']} stopped with {job['status']}; review its log before continuing")
                 self.activity(workflow, workflow["status"], workflow["error"])
                 self.put("workflow", workflow)
+                self.notify_result("workflow", workflow)
                 return
         # Bound scheduler work even when many targets reuse cached results.
         for _ in range(32):
@@ -245,3 +250,5 @@ class WorkflowMixin:
             self.activity(workflow, "running", f"{stage['tool']} → {target}")
             break
         self.put("workflow", workflow)
+        if workflow["status"] not in ACTIVE:
+            self.notify_result("workflow", workflow)

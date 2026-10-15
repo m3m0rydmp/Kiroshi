@@ -39,6 +39,9 @@ scans. The dashboard starts even when every optional tool is missing.
 - Previewable sequential engagement workflows, with HTTP checks after each discovery stage.
 - Anonymous recon cache, named cookie/header sessions, live activity, tool diagnostics and result downloads.
 - Gentle pacing, tool-supported delay/jitter and observed block-response cooldowns.
+- Overview webhook notifications with platform-specific formatting and test delivery.
+- Backend/tool resource metrics and an isolated performance regression benchmark.
+- Confirmed job/log erasure that preserves engagements and cached discoveries.
 - Evidence-readiness checks before confirmed/reported status and public disclosure references.
 - Shared instructions and handoff files for terminal-based Claude Code/Codex sessions.
 

@@ -332,3 +332,20 @@ identity and pacing settings rather than silently selecting httpx again.
 Subfinder and URLFinder manage their own browser-style user agents for passive
 source queries. Other HTTP adapters use Kiroshi's configured browser identity.
 Passive provider configurations remain isolated from the user's normal home.
+
+
+## Erasing history and loading feedback
+
+In **Jobs & logs**, choose an engagement filter (or all engagements), then
+**Erase jobs & logs**. The confirmation shows which scope and how many records
+will be affected. Confirming removes job log directories and completed workflow
+history. Engagements, sessions, findings, cached discoveries, duplicate protection,
+and traffic holds remain saved. Active jobs/workflows must first finish or stop.
+The UI never erases history merely from opening or cancelling the dialog.
+
+Workflow preview and startup show animated progress messages, disable duplicate
+submissions, and restore controls after errors. Reduced-motion preferences are
+respected. Live workflows also show an active indicator while awaiting tool output.
+
+Overview includes [webhook notifications](docs/NOTIFICATIONS.md) and
+[performance snapshots and verification](docs/PERFORMANCE.md).

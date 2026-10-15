@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd -- "$(dirname -- "$(readlink -f -- "$0")")"
+case "${1:-}" in
+  install-tools) shift; exec python3 -m dashboard.install_tools "$@" ;;
+  doctor) shift; exec python3 -m dashboard.doctor "$@" ;;
+esac
 exec python3 -m dashboard.server "$@"

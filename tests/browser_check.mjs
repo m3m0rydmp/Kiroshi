@@ -1,5 +1,6 @@
 // Optional Chrome smoke test using its native DevTools pipe; no npm dependencies.
 import { spawn } from "node:child_process";
+import { createServer } from "node:http";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,7 +19,7 @@ const server = spawn(
   ],
   { stdio: ["ignore", "pipe", "pipe"] },
 );
-let chrome;
+let chrome, webhookReceiver;
 try {
   const base = await new Promise((resolve, reject) => {
     const timeout = setTimeout(
@@ -358,7 +359,43 @@ print(json.dumps({'url':'http://127.0.0.1:9999/fixture','status_code':200}),flus
     true,
   );
   await evaluate(
-    "document.querySelector('#workflow-form').elements.max_jobs.value=2;document.querySelector('[data-action=workflow-preview]').click()",
+    `(()=>{const original=window.fetch.bind(window);window.fixtureRequests={preview:0,start:0,erase:0};window.fixtureFailPreview=true;window.fetch=async(input,init)=>{const path=String(input);const kind=path.endsWith('/api/workflows/preview')?'preview':path.endsWith('/api/workflows')?'start':path.endsWith('/api/jobs/erase')?'erase':null;if(kind){window.fixtureRequests[kind]++;await new Promise(r=>setTimeout(r,1200));if(kind==='preview'&&window.fixtureFailPreview){window.fixtureFailPreview=false;return new Response(JSON.stringify({error:'Fixture preview failure'}),{status:400});}}return original(input,init);};document.querySelector('#workflow-form').elements.max_jobs.value=2;document.querySelector('[data-action=workflow-preview]').click();})()`,
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('#workflow-form').getAttribute('aria-busy')",
+    ),
+    "true",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('.request-progress').textContent.includes('Preparing workflow')",
+    ),
+    true,
+  );
+  await wait(
+    "document.querySelector('#form-error')?.textContent.includes('Fixture preview failure')",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('#workflow-form').hasAttribute('aria-busy')",
+    ),
+    false,
+  );
+  assert.equal(
+    await evaluate("document.querySelector('#workflow-start').disabled"),
+    true,
+  );
+  await evaluate(
+    "document.querySelector('[data-action=workflow-preview]').click()",
+  );
+  const loadingShot = await page("Page.captureScreenshot", {
+    format: "png",
+    captureBeyondViewport: true,
+  });
+  await writeFile(
+    "/tmp/kiroshi-workflow-loading.png",
+    Buffer.from(loadingShot.data, "base64"),
   );
   await wait("document.querySelector('#workflow-start')?.disabled===false");
   assert.equal(
@@ -367,7 +404,22 @@ print(json.dumps({'url':'http://127.0.0.1:9999/fixture','status_code':200}),flus
     ),
     4,
   );
-  await evaluate("document.querySelector('#workflow-form').requestSubmit()");
+  await evaluate(
+    "document.querySelector('#workflow-form').requestSubmit();document.querySelector('#workflow-form').requestSubmit()",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('#workflow-form').getAttribute('aria-busy')",
+    ),
+    "true",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('.request-progress').textContent.includes('Starting workflow')",
+    ),
+    true,
+  );
+  assert.equal(await evaluate("window.fixtureRequests.start"), 1);
   await wait(
     "document.querySelector('#workflow-meta')?.textContent.includes('Ordered stages')",
   );
@@ -382,7 +434,92 @@ print(json.dumps({'url':'http://127.0.0.1:9999/fixture','status_code':200}),flus
     "/tmp/kiroshi-workflow.png",
     Buffer.from(workflowShot.data, "base64"),
   );
-  await evaluate("closeModal()");
+  await evaluate(
+    "closeModal();navigate('jobs');document.querySelector('[data-action=erase-history]').click()",
+  );
+  assert.equal(
+    await evaluate("document.querySelector('#erase-history-form')!==null"),
+    true,
+  );
+  const historyCount = await evaluate("state.jobs.length");
+  await evaluate(
+    "document.querySelector('#erase-history-form [data-action=close]').click()",
+  );
+  assert.equal(await evaluate("state.jobs.length"), historyCount);
+  await evaluate(
+    "document.querySelector('[data-action=erase-history]').click();document.querySelector('#erase-history-form').requestSubmit()",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('#erase-history-form').getAttribute('aria-busy')",
+    ),
+    "true",
+  );
+  await wait(
+    "!document.querySelector('#modal').open && state.jobs.length===0 && state.workflows.length===0",
+  );
+  assert.equal(await evaluate("state.engagements.length"), 1);
+  assert.equal(await evaluate("state.findings.length"), 1);
+  assert.equal(await evaluate("state.assets.length>0"), true);
+  assert.equal(await evaluate("window.fixtureRequests.erase"), 1);
+  const deliveries = [];
+  webhookReceiver = createServer((request, response) => {
+    let raw = "";
+    request.on("data", (chunk) => (raw += chunk));
+    request.on("end", () => {
+      deliveries.push({ headers: request.headers, body: JSON.parse(raw) });
+      response.writeHead(204);
+      response.end();
+    });
+  });
+  await new Promise((resolve) =>
+    webhookReceiver.listen(0, "127.0.0.1", resolve),
+  );
+  const hook = `http://127.0.0.1:${webhookReceiver.address().port}/private/fixture-webhook-secret`;
+  await evaluate(
+    `navigate('overview');(()=>{const f=document.querySelector('#notification-form');f.elements.url.value=${JSON.stringify(hook)};f.requestSubmit();})()`,
+  );
+  await wait(
+    "document.querySelector('#notification-status')?.textContent.includes('Webhook settings saved')",
+  );
+  assert.equal(
+    await evaluate("document.querySelector('#webhook-url').value"),
+    "",
+  );
+  assert.equal(
+    await evaluate(
+      "JSON.stringify(state.notifications).includes('fixture-webhook-secret')",
+    ),
+    false,
+  );
+  await evaluate(
+    "document.querySelector('[data-action=test-notification]').click()",
+  );
+  await wait(
+    "document.querySelector('#notification-status')?.textContent.includes('Test notification sent')",
+  );
+  assert.equal(deliveries.length, 1);
+  assert.equal(deliveries[0].body.source, "Kiroshi");
+  assert.equal(deliveries[0].headers.cookie, undefined);
+  assert.equal(deliveries[0].headers.authorization, undefined);
+  assert.ok(deliveries[0].headers["user-agent"].includes("Mozilla/"));
+  await evaluate(
+    "document.querySelector('[data-action=refresh-performance]').click()",
+  );
+  await wait(
+    "document.querySelector('#performance-summary')?.textContent.includes('Dashboard memory')",
+  );
+  await page("Performance.enable");
+  const heap = await page("Performance.getMetrics");
+  const usedHeap = heap.metrics.find(
+    (metric) => metric.name === "JSHeapUsedSize",
+  )?.value;
+  if (usedHeap)
+    console.log(`Browser JS heap: ${(usedHeap / 1048576).toFixed(2)} MB`);
+  await evaluate(
+    "document.querySelector('[data-action=remove-notification]').click()",
+  );
+  await wait("state.notifications.configured===false");
   await page("Emulation.setDeviceMetricsOverride", {
     width: 390,
     height: 844,
@@ -406,13 +543,14 @@ print(json.dumps({'url':'http://127.0.0.1:9999/fixture','status_code':200}),flus
     Buffer.from(mobile.data, "base64"),
   );
   console.log(
-    "PASS browser: overview, engagements, sessions, command previews, handoff, tools, report readiness gate, confirmed review, reference dialogs, live tool output, rerun identity, ordered workflows, mobile layout",
+    "PASS browser: overview, engagements, sessions, command previews, handoff, tools, report readiness gate, confirmed review, reference dialogs, live tool output, rerun identity, ordered workflows, loading/error recovery, confirmed history erasure, private webhook configuration and delivery, performance panel, mobile layout",
   );
   console.log(
     "Screenshots: /tmp/kiroshi-overview.png and /tmp/kiroshi-mobile.png",
   );
   await cdp("Browser.close").catch(() => {});
 } finally {
+  webhookReceiver?.close();
   chrome?.kill("SIGKILL");
   server.kill("SIGINT");
   await new Promise((resolve) => setTimeout(resolve, 800));
