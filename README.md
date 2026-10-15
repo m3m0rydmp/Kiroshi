@@ -1,14 +1,24 @@
-# Kiroshi — local bug bounty dashboard
+# Kiroshi
 
-A browser-based engagement workspace that runs installed Linux/WSL tools, keeps
-recon and evidence locally, and prepares shared workspaces for Claude Code or Codex.
-The interface uses a cyan/lavender/sunset theme.
+**A local dashboard for bug bounty engagements, built around your Linux tools.**
 
-## Install and start
+[![License: MIT](https://img.shields.io/badge/License-MIT-a9eaf4)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-c8b0f0)](docs/INSTALL.md)
+[![Linux / WSL2](https://img.shields.io/badge/Platform-Linux%20%2F%20WSL2-ffb8aa)](docs/INSTALL.md)
 
-Requires **Linux or WSL2, Python 3.10+, Bash and GNU coreutils**. Git is needed to
-clone/update. No npm build, pip packages, Docker, model key or paid service is needed
-for the dashboard itself. Install scan tools separately as needed.
+Kiroshi brings scope management, sequential recon workflows, cached discoveries,
+authenticated sessions, live logs, and evidence review into one browser interface.
+Commands run through your installed Linux/WSL binaries. Claude Code and Codex are
+optional tools for deeper analysis; the dashboard and scanning workflows run
+without an AI provider.
+
+[Quick start](#quick-start) · [Tools and workflow](#tools-and-workflow) ·
+[Documentation](#documentation) · [Credits](#credits-and-license)
+
+## Quick start
+
+**Requirements:** Linux or WSL2, Python 3.10+, Bash, GNU coreutils, `sed`, and Git.
+The dashboard has no pip or npm runtime dependencies and does not require Docker.
 
 ```bash
 git clone https://github.com/m3m0rydmp/Kiroshi.git
@@ -17,85 +27,145 @@ bash install.sh
 ./kiroshi
 ```
 
-Open **http://localhost:8741**. Keep the terminal open; Ctrl+C stops the server.
-If this dashboard is published on a non-default branch, clone that branch instead:
-`git clone --branch dashboard-wsl https://github.com/m3m0rydmp/Kiroshi.git`.
-Adjust the repository URL if the published fork is renamed.
+Open **[http://localhost:8741](http://localhost:8741)**. Keep the terminal open;
+press **Ctrl+C** to stop the server. After reboot, open your Linux terminal and run
+`./kiroshi` from the checkout again.
 
-The installer creates a local launcher in `~/.local/bin` and checks tools. It does
-not install scan tools, use sudo, change your shell files, start a service, or run
-scans. The dashboard starts even when every optional tool is missing.
+The installer creates a launcher in `~/.local/bin` and checks available tools. It
+does not run scans, download scanner binaries, change shell startup files, or
+install a boot service. Missing tools do not prevent the dashboard from starting.
 
-**[Installation and tool setup](docs/INSTALL.md)** ·
-**[Traffic controls and WAF limits](docs/TRAFFIC.md)** ·
-**[Detailed usage](DASHBOARD.md)** · **[Original scaffold CLI](docs/SCAFFOLD.md)**
+### Set up workflow tools
 
-## Features
+```bash
+./kiroshi install-tools --dry-run   # Show missing tools and installation commands
+./kiroshi install-tools             # Install missing workflow tools
+./kiroshi doctor --require-tools    # Check executable and adapter compatibility
+```
 
-- Engagement scope, exclusions, rate ceilings and bounded job execution.
-- Automatic machine-local tool discovery, explicit path overrides and compatibility checks.
-- Nine scan adapters: Subfinder, dnsx, httpx, tlsx, URLFinder, Katana, Feroxbuster, ffuf and Nuclei.
-- A broader 36-tool inventory; inventory-only entries do not imply runnable support.
-- Previewable sequential engagement workflows, with HTTP checks after each discovery stage.
-- Anonymous recon cache, named cookie/header sessions, live activity, tool diagnostics and result downloads.
-- Gentle pacing, tool-supported delay/jitter and observed block-response cooldowns.
-- Overview webhook notifications with platform-specific formatting and test delivery.
-- Backend/tool resource metrics and an isolated performance regression benchmark.
-- Confirmed job/log erasure that preserves engagements and cached discoveries.
-- Evidence-readiness checks before confirmed/reported status and public disclosure references.
-- Shared instructions and handoff files for terminal-based Claude Code/Codex sessions.
-
-Nuclei currently runs a bundled inventory template, not a general vulnerability scan.
-Agent execution stays in your terminal. The dashboard does not submit reports to
-HackerOne or automatically exploit findings.
+The explicit tool installer uses Go for the supported Go tools and Cargo for
+Feroxbuster. Install the required compilers first, or use the maintainers' prebuilt
+releases. Existing binaries are not automatically upgraded or overwritten.
+See [installation and tool setup](docs/INSTALL.md) for prerequisites and alternatives.
 
 ## First engagement
 
-1. Create an engagement with its policy URL and explicitly authorized hosts/exclusions.
-2. Check **Toolchain**; install any tools you need and use **Check binaries**.
-3. Choose **Run engagement workflow**, preview the ordered stages, then start and watch live output. Use **Run one tool** for an individual check. Results persist in **Asset cache** and **Jobs & logs**.
-4. Add an exact-origin cookie/header session when ready; run again against cached assets.
-5. Review candidates in **Findings** and use **Public reports** for attributed historical context.
-6. Save **Agent handoff**, then copy the terminal command for your configured agent client.
+1. **Define scope.** Create an engagement with authorized assets, exclusions,
+   the program policy, request-rate limits, and job time limits.
+2. **Check the toolchain.** Review detected executables and run **Check binaries**.
+   Paths are detected on the current machine; saved overrides are local settings.
+3. **Preview the workflow.** Select **Run engagement workflow**, review its ordered
+   stages and limits, then choose **Start workflow & watch live**. Use **Run one
+   tool** for an individual check.
+4. **Review discoveries.** Results persist in **Asset cache** and **Jobs & logs**.
+   Add an exact-origin cookie/header session when an authenticated pass is needed.
+5. **Verify candidates.** Record reproducible evidence in **Findings**. Public
+   reports provide historical context, never proof of eligibility or impact.
+6. **Continue with an agent if useful.** **Agent handoff** prepares shared scope,
+   evidence, and notes for terminal-based Claude Code or Codex sessions.
 
-Paths shown in Toolchain describe **the current installation**, not paths someone
-else needs to recreate. Overrides live in ignored local state. Missing/stale paths
-fall back to autodetection; the detector distinguishes ProjectDiscovery httpx from
-the unrelated Python HTTP client CLI.
+Only test assets for which you have authorization, within the program's rules.
 
-## Traffic behavior
+## Tools and workflow
 
-The default ceiling is 5 requests/second with one worker per tool. Runs can choose
-a gentle 1 request/second profile or a lower rate within the engagement ceiling.
-Where emitted scanner output exposes configured 429/503 signals, the runner can
-stop the job and hold queued runs to that origin. HTTP 403 is optional because it
-can represent expected access control. See the [support matrix](docs/TRAFFIC.md).
+Kiroshi has **nine runnable adapters** and a **36-tool inventory**. Installing a
+catalog entry does not automatically make it executable or add it to a workflow.
+Tools such as `anew`, `uro`, Amass, Nmap, Dalfox, and sqlmap remain inventory-only.
+Kiroshi already deduplicates cached assets and identical tool runs internally.
 
-These are pacing and feedback controls, not guaranteed WAF evasion. There is no
-automatic challenge solving, payload obfuscation, IP rotation or authentication
-bypass. Real browser User-Agent headers do not reproduce a browser's full behavior
-or TLS fingerprint. A blocked run needs review; it is not proof of a vulnerability.
+The engagement workflow runs one process at a time:
 
-## Local data
+| Stage | Tool                | Purpose                                            |
+| ----- | ------------------- | -------------------------------------------------- |
+| 1     | Subfinder           | Discover candidate subdomains from passive sources |
+| 2     | dnsx                | Resolve authorized hosts                           |
+| 3     | httpx               | Check HTTP/HTTPS services after host discovery     |
+| 4     | tlsx                | Collect certificate and TLS inventory              |
+| 5     | URLFinder           | Collect URLs from public sources                   |
+| 6     | httpx               | Check newly discovered URLs                        |
+| 7     | Katana              | Crawl responding origins                           |
+| 8     | httpx               | Check newly crawled URLs                           |
+| 9     | ffuf or Feroxbuster | Discover paths using the bundled wordlist          |
+| 10    | httpx               | Check newly discovered paths                       |
+| 11    | Nuclei              | Run the bundled server-header inventory template   |
 
-The server binds only to `127.0.0.1`. Runtime state defaults to `.kiroshi-data/`, ignored
-by Git. It includes credentials and sensitive evidence; keep it private and back it
-up while the server is stopped. Optional custom data directories should live outside
-the checkout. This is a single-user service without remote login or multi-user isolation.
+Later stages use scoped discoveries from earlier stages. Identical completed
+checks reuse cached results unless an explicit repeat is requested; the same
+effective check runs at most once within a workflow.
 
-## Validation
+Default workflow bounds are **50 new targets per stage** and **200 total tool
+jobs**, configurable before starting. Missing tools and reached limits are shown
+as limited coverage. Failed or blocked jobs stop the workflow. A restart interrupts
+it rather than automatically resuming network activity.
+
+**Nuclei currently performs inventory only.** Kiroshi does not automatically run
+broad vulnerability templates, exploit findings, or submit reports to HackerOne.
+
+## Workspace features
+
+| Area               | Capabilities                                                                                                     |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| Scope and sessions | Host/IP and wildcard rules, URL boundaries, exclusions, exact-origin private cookies and headers                 |
+| Execution          | Workflow previews, duplicate protection, bounded jobs, cancellation, loading indicators and stage progress       |
+| Evidence           | Persistent asset cache, live tool output, lifecycle events, command previews and log downloads                   |
+| Review             | Evidence-completeness checks, reviewer attestations and attributed public-report references                      |
+| Notifications      | Discord embeds, Telegram messages, Slack blocks and generic JSON webhooks, with event settings and test delivery |
+| Performance        | Backend memory/CPU snapshots, sampled scanner resource usage and a repeatable local benchmark                    |
+| History            | Confirmed job/log erasure that preserves engagements, discoveries, findings and duplicate protection             |
+
+### Traffic and scope boundaries
+
+The default rate ceiling is **5 requests/second**, with one worker per tool.
+Supported adapters offer lower rates, gentle pacing, delays, or jitter. Observable
+429/503 signals can stop a job and hold subsequent runs to that origin; 403
+monitoring is optional. Tool output determines which signals are visible.
+
+These controls do not guarantee WAF evasion or reproduce a browser's TLS and
+JavaScript behavior. URL-only rules can be saved, but current scan adapters require
+whole-host scope and refuse hosts with URL exclusions. See the
+[traffic support matrix](docs/TRAFFIC.md) and [usage guide](DASHBOARD.md).
+
+### Local data and secrets
+
+The server binds to **127.0.0.1** and is intended for one local user. Runtime data
+defaults to `.kiroshi-data/`, which Git ignores. Earlier installations can continue
+using their existing data directory. It contains sensitive evidence and private
+session/webhook settings; back it up while the server is stopped.
+
+Saved credentials and webhook URLs are not returned through the API. Notifications
+exclude session credentials and raw scan logs. There is no remote login or
+multi-user isolation. Custom data directories should live outside the checkout.
+
+## Documentation
+
+| Guide                                         | Contents                                                                 |
+| --------------------------------------------- | ------------------------------------------------------------------------ |
+| [Installation](docs/INSTALL.md)               | WSL/Linux setup, missing-tool installation, detection and path overrides |
+| [Dashboard usage](DASHBOARD.md)               | Engagements, workflows, sessions, findings and agent handoffs            |
+| [Traffic controls](docs/TRAFFIC.md)           | Rate limits, cooldowns and adapter-specific support                      |
+| [Notifications](docs/NOTIFICATIONS.md)        | Webhook formats, Telegram chat IDs, event settings and secret storage    |
+| [Performance](docs/PERFORMANCE.md)            | Resource metrics, benchmark procedure and measured results               |
+| [Business logic review](docs/LOGIC_REVIEW.md) | Reviewed workflows, corrected issues and remaining boundaries            |
+| [Scaffold CLI](docs/SCAFFOLD.md)              | The retained upstream script and its commands                            |
+
+## Verification
 
 ```bash
-python3 -m dashboard.doctor
+./kiroshi doctor --require-tools
 python3 -m unittest discover -s tests -v
+node tests/browser_check.mjs
+python3 -m tests.performance_check --output /tmp/kiroshi-performance.json
 ```
 
-Optional local HTTP/browser integration checks are documented in [DASHBOARD.md](DASHBOARD.md).
+Browser checks require Node.js and a compatible Chrome installation; neither is
+needed to use the dashboard. Browser and performance fixtures use temporary local
+data. Additional loopback integration checks are documented in [DASHBOARD.md](DASHBOARD.md).
 
 ## Credits and license
 
-The original `hunt` scaffold script and methodology were created by
+Kiroshi extends the `hunt` scaffold script and methodology created by
 [0xcucumbersalad](https://github.com/0xcucumbersalad) in
 [0xcucumbersalad/hunt](https://github.com/0xcucumbersalad/hunt).
-This project extends that script with the local dashboard and runner. Original
-attribution is retained in [LICENSE](LICENSE). MIT licensed.
+The upstream script and attribution are retained.
+
+Released under the [MIT License](LICENSE).

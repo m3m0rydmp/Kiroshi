@@ -20,7 +20,7 @@ you choose to compile scan tools; official prebuilt releases are another option.
 Chrome is optional for browser QA, not required for the built-in non-headless crawl.
 Claude Code/Codex and their provider credentials are separate optional installations.
 
-## Clone the published fork
+## Clone the repository
 
 ```bash
 git clone https://github.com/m3m0rydmp/Kiroshi.git
@@ -29,8 +29,6 @@ bash install.sh
 ./kiroshi
 ```
 
-The URL assumes the fork is published as `m3m0rydmp/Kiroshi`. Change it if renamed.
-If the dashboard is only on `dashboard-wsl`, add `--branch dashboard-wsl` to clone.
 The `install.sh` script never downloads tools, runs sudo, starts a background service,
 or makes target requests. It checks Python, creates a symlink launcher, and runs the
 local tool doctor. Help/compatibility checks execute installed tools with `-h`/`--help`.
@@ -80,17 +78,17 @@ is already running; stop that server or select another port.
 Only install tools you intend to use. Missing tools do not prevent startup. Get
 releases/packages from each tool's maintainer, then run the doctor again.
 
-| Adapter | Official installation source |
-|---|---|
-| URLFinder | [ProjectDiscovery repository](https://github.com/projectdiscovery/urlfinder) |
-| Subfinder | [ProjectDiscovery install guide](https://docs.projectdiscovery.io/opensource/subfinder/install) |
-| dnsx | [ProjectDiscovery install guide](https://docs.projectdiscovery.io/opensource/dnsx/install) |
-| httpx | [ProjectDiscovery install guide](https://docs.projectdiscovery.io/opensource/httpx/install) |
-| tlsx | [Maintainer repository](https://github.com/projectdiscovery/tlsx#installation) |
-| Katana | [ProjectDiscovery install guide](https://docs.projectdiscovery.io/opensource/katana/install) |
-| Nuclei | [ProjectDiscovery install guide](https://docs.projectdiscovery.io/opensource/nuclei/install) |
-| Feroxbuster | [Maintainer repository](https://github.com/epi052/feroxbuster#installation) |
-| ffuf | [Maintainer repository](https://github.com/ffuf/ffuf#installation) |
+| Adapter     | Official installation source                                                                    |
+| ----------- | ----------------------------------------------------------------------------------------------- |
+| URLFinder   | [ProjectDiscovery repository](https://github.com/projectdiscovery/urlfinder)                    |
+| Subfinder   | [ProjectDiscovery install guide](https://docs.projectdiscovery.io/opensource/subfinder/install) |
+| dnsx        | [ProjectDiscovery install guide](https://docs.projectdiscovery.io/opensource/dnsx/install)      |
+| httpx       | [ProjectDiscovery install guide](https://docs.projectdiscovery.io/opensource/httpx/install)     |
+| tlsx        | [Maintainer repository](https://github.com/projectdiscovery/tlsx#installation)                  |
+| Katana      | [ProjectDiscovery install guide](https://docs.projectdiscovery.io/opensource/katana/install)    |
+| Nuclei      | [ProjectDiscovery install guide](https://docs.projectdiscovery.io/opensource/nuclei/install)    |
+| Feroxbuster | [Maintainer repository](https://github.com/epi052/feroxbuster#installation)                     |
+| ffuf        | [Maintainer repository](https://github.com/ffuf/ffuf#installation)                              |
 
 For a supported, current Go toolchain, the maintainer installation commands are:
 
@@ -180,7 +178,6 @@ Configuration now uses `KIROSHI_USER_AGENT`, `KIROSHI_H1_API_USERNAME` and
 `KIROSHI_H1_API_TOKEN`. Earlier `HUNT_` environment names remain supported as
 fallbacks, with canonical names taking precedence. Rerun `bash install.sh` to add
 the canonical launcher to this machine.
-
 
 ## Install missing workflow tools
 
