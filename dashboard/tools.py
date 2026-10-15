@@ -129,6 +129,27 @@ def rules(text):
     for raw in values:
         if not raw:
             continue
+        raw = str(raw).strip()
+        if any(c.isspace() or ord(c) < 32 for c in raw):
+            raise ValueError("Scope entries cannot contain whitespace")
+        prefix = ""
+        suffix = ""
+        if "://" in raw:
+            parsed = urlsplit(raw)
+            if (parsed.scheme not in ("http", "https") or not parsed.hostname
+                    or parsed.username is not None or parsed.password is not None
+                    or parsed.query or parsed.fragment or "\\" in raw
+                    or "%" in parsed.path or any(p in (".", "..") for p in parsed.path.split("/"))):
+                raise ValueError("Scope URLs must use HTTP(S), without credentials, queries, fragments or encoded paths")
+            port = parsed.port
+            if port is not None and not 1 <= port <= 65535:
+                raise ValueError("Invalid scope port")
+            prefix = parsed.scheme + "://"
+            suffix = (":" + str(port) if port is not None else "") + (parsed.path.rstrip("/") or "")
+            if not suffix:
+                # A root URL is a convenient way to paste a host scope.
+                prefix = ""
+            raw = parsed.hostname
         wildcard = raw.startswith("*.")
         normalized = host(raw[2:] if wildcard else raw)
         if wildcard:
@@ -138,16 +159,36 @@ def rules(text):
                 pass
             else:
                 raise ValueError("IP wildcards are unsupported")
-        result.append(("*." if wildcard else "") + normalized)
+        normalized = ("*." if wildcard else "") + normalized
+        if prefix:
+            normalized = "[" + normalized + "]" if ":" in normalized else normalized
+        result.append(prefix + normalized + suffix)
     return list(dict.fromkeys(result))
 
 
 def matches(name, rule):
+    # URL rules retain scheme, port and path; host-only checks cannot grant them.
+    if "://" in rule:
+        return False
     return name.endswith("." + rule[2:]) if rule.startswith("*.") else name == rule
 
 
+def url_rule_matches(value, rule):
+    if "://" not in rule:
+        return matches(host(urlsplit(value).hostname), rule)
+    target, boundary = urlsplit(value), urlsplit(rule)
+    if (target.scheme != boundary.scheme
+            or (target.port or (443 if target.scheme == "https" else 80)) != (boundary.port or (443 if boundary.scheme == "https" else 80))
+            or not matches(host(target.hostname), boundary.hostname)):
+        return False
+    path = boundary.path.rstrip("/")
+    return not path or target.path == path or target.path.startswith(path + "/")
+
+
 def allowed(name, engagement):
-    return any(matches(name, r) for r in engagement["scope"]) and not any(matches(name, r) for r in engagement["excluded"])
+    return any(matches(name, r) for r in engagement["scope"]) and not any(
+        matches(name, urlsplit(r).hostname if "://" in r else r) for r in engagement["excluded"])
+
 
 
 def target_url(value, engagement):
@@ -158,15 +199,19 @@ def target_url(value, engagement):
     if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username is not None or parsed.password is not None:
         raise ValueError("Use an http(s) URL without credentials")
     name = host(parsed.hostname)
-    if not allowed(name, engagement):
-        raise ValueError("Target is outside the engagement scope or explicitly excluded")
     port = parsed.port
     if port is not None and not 1 <= port <= 65535:
         raise ValueError("Invalid port")
     netloc = f"[{name}]" if ":" in name else name
     if port:
         netloc += f":{port}"
-    return parsed._replace(netloc=netloc, fragment="").geturl(), name, port
+    url = parsed._replace(netloc=netloc, fragment="").geturl()
+    if not any(url_rule_matches(url, r) for r in engagement["scope"]) or any(url_rule_matches(url, r) for r in engagement["excluded"]):
+        raise ValueError("Target is outside the engagement scope or explicitly excluded")
+    restricted = any("://" in r and urlsplit(r).path for r in engagement["scope"] + engagement["excluded"])
+    if restricted and ("%" in parsed.path or any(p in (".", "..") for p in parsed.path.split("/"))):
+        raise ValueError("Use a literal path without traversal or percent encoding for URL-restricted scope")
+    return url, name, port
 
 
 def command(engagement, payload, tools):
@@ -181,6 +226,10 @@ def command(engagement, payload, tools):
     traffic = effective(engagement, payload)
     rate, concurrency, timeout = str(traffic["rate"]), str(traffic["concurrency"]), str(traffic["timeout"])
     url, name, port = target_url(payload.get("target", ""), engagement)
+    # Current adapters can crawl, probe alternate paths, or discard URL boundaries.
+    # Require whole-host authorization until each supports a request-level scope gate.
+    if not allowed(name, engagement):
+        raise ValueError("This adapter requires whole-host scope; URL-only scope is saved but cannot be scanned by current adapters")
     exe = item["path"]
     duration = engagement["duration"]
     common = ["-silent", "-duc"]

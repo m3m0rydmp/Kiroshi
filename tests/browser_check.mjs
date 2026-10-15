@@ -141,8 +141,9 @@ try {
     "document.querySelector('[data-action=\"new-engagement\"]').click()",
   );
   await wait("document.querySelector('#engagement-form') !== null");
+  assert.equal(await evaluate("getComputedStyle(document.querySelector('#modal'), '::backdrop').backdropFilter"), "none");
   await evaluate(
-    `(()=>{const f=document.querySelector('#engagement-form');f.elements.name.value='Local lab / UI check';f.elements.scope.value='127.0.0.1';f.elements.policy.value='Loopback fixture only';f.elements.authorized.checked=true;f.requestSubmit();})()`,
+    `(()=>{const f=document.querySelector('#engagement-form');f.elements.name.value='Local lab / UI check';f.elements.scope.value='http://127.0.0.1/\\nhttps://hackerone.com/mcp\\nhttps://*.hackerone-user-content.com/';f.elements.policy.value='Loopback fixture only';f.elements.authorized.checked=true;f.requestSubmit();})()`,
   );
   await wait(
     "!document.querySelector('dialog').open && document.querySelector('h1')?.textContent.includes('Local lab')",

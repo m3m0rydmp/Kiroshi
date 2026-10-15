@@ -33,9 +33,11 @@ The process binds to IPv4 loopback only. Stop it with Ctrl+C.
 
 1. Create an engagement. Enter the program policy URL separately from explicit
    in-scope hostnames/IPs and excluded hosts. `*.example.com` covers subdomains,
-   not the apex. URL/path, port-specific, CIDR, and mobile-app scope rules are not
-   represented by this first version; do not use a broader hostname rule to stand
-   in for a narrower program authorization.
+   not the apex. Root HTTP(S) URLs (including wildcard URLs) normalize to host
+   rules. URLs with paths or explicit ports retain those boundaries. Current scan
+   adapters require whole-host authorization and refuse hosts with URL exclusions;
+   URL-only rules can be saved but cannot be scanned yet. CIDR and mobile-app
+   rules remain unsupported. Do not broaden scope to bypass an adapter limitation.
 2. Choose a ready tool, enter an authorized target, preview, then queue an anonymous
    run. Nothing runs just because you entered a domain or created an engagement.
 3. Results remain in the local cache and per-run logs across browser/server restarts.

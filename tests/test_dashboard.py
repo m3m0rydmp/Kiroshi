@@ -27,8 +27,32 @@ class ScopeTests(unittest.TestCase):
                 target_url(value, self.engagement)
         self.assertEqual(target_url("https://EXAMPLE.com/path", self.engagement)[1], "example.com")
 
+    def test_pasted_program_scope_urls(self):
+        scope = rules("www.wearehackerone.com\nhttps://hackerone.com/mcp\nhackerone.com\n*.vpn.hackerone.net\nhttps://*.hackerone-ext-content.com\nhttps://*.hackerone-user-content.com/")
+        self.assertEqual(scope, ["www.wearehackerone.com", "https://hackerone.com/mcp", "hackerone.com", "*.vpn.hackerone.net", "*.hackerone-ext-content.com", "*.hackerone-user-content.com"])
+        engagement = dict(scope=scope, excluded=[])
+        self.assertTrue(allowed("a.hackerone-user-content.com", engagement))
+        self.assertFalse(allowed("hackerone-user-content.com", engagement))
+        self.assertTrue(allowed("hackerone.com", engagement))
+
+    def test_url_boundaries_are_not_expanded_to_hosts(self):
+        engagement = dict(scope=rules("https://example.com/mcp"), excluded=[])
+        self.assertFalse(allowed("example.com", engagement))
+        self.assertEqual(target_url("https://example.com/mcp/child", engagement)[1], "example.com")
+        for value in ("https://example.com/", "https://example.com/mcpevil", "http://example.com/mcp", "https://example.com/mcp/../admin", "https://example.com/mcp/%2e%2e/admin"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                target_url(value, engagement)
+        tools = [dict(name="httpx", adapter=True, installed=True, path="/fixture/httpx")]
+        from dashboard.tools import command
+        with self.assertRaisesRegex(ValueError, "whole-host scope"):
+            command({**engagement, "rate": 1, "duration": 10}, dict(tool="httpx", target="https://example.com/mcp"), tools)
+        excluded = dict(scope=["example.com"], excluded=rules("https://example.com/private"))
+        self.assertFalse(allowed("example.com", excluded))
+        with self.assertRaises(ValueError):
+            target_url("https://example.com/private/child", excluded)
+
     def test_invalid_scope(self):
-        for value in ("https://example.com", "example.com/path", "example.com:443", "../", "*.127.0.0.1"):
+        for value in ("ftp://example.com", "example.com/path", "example.com:443", "../", "*.127.0.0.1"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 rules(value)
 

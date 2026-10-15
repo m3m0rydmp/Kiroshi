@@ -640,7 +640,7 @@ dialog {
 }
 dialog::backdrop {
   background: #06090dc9;
-  backdrop-filter: blur(4px);
+  backdrop-filter: none;
 }
 dialog h2 {
   font-size: 21px;
