@@ -1202,6 +1202,15 @@ progress.bar::-moz-progress-bar {
   background: #4b3431;
   color: #ffd2ab;
 }
+.pill.rate_limited,
+.pill.blocked {
+  background: #4b3431;
+  color: #ffd2ab;
+}
+.pill.incompatible {
+  background: #4a293c;
+  color: #ffabbf;
+}
 .reference-card h3 {
   font-family: inherit;
   line-height: 1.6;

@@ -195,6 +195,39 @@ try {
     1,
   );
   await evaluate(
+    "document.querySelector('[data-action=\"tool-path\"]').click()",
+  );
+  await evaluate(
+    "(async()=>{const s=await (await fetch('/api/state')).json();document.querySelector('#path-form').elements.path.value=s.tools.find(t=>t.name==='katana').path;document.querySelector('#path-form').requestSubmit();})()",
+  );
+  await wait("!document.querySelector('dialog').open");
+  assert.equal(
+    await evaluate(
+      "(async()=>{const s=await (await fetch('/api/state')).json();return s.tools.filter(t=>t.configured_path).length;})()",
+    ),
+    1,
+  );
+  await evaluate(
+    "document.querySelector('[data-action=\"tool-path\"][data-id=\"katana\"]').click();document.querySelector('#path-form').elements.path.value='';document.querySelector('#path-form').requestSubmit()",
+  );
+  await wait("!document.querySelector('dialog').open");
+  assert.equal(
+    await evaluate(
+      "(async()=>{const s=await (await fetch('/api/state')).json();return s.tools.filter(t=>t.configured_path).length;})()",
+    ),
+    0,
+  );
+  await evaluate(
+    "document.querySelector('[data-view=\"jobs\"]').click();document.querySelector('[data-action=\"run\"]').click()",
+  );
+  await evaluate(
+    "document.querySelector('#run-form').elements.target.value='http://127.0.0.1:9999';document.querySelector('#run-traffic-profile').value='gentle';document.querySelector('#run-traffic-profile').dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('[data-action=\"preview\"]').click()",
+  );
+  await wait(
+    "document.querySelector('#command-preview')?.textContent.includes('1/s')",
+  );
+  await evaluate("document.querySelector('[data-action=\"close\"]').click()");
+  await evaluate(
     "document.querySelector('[data-view=\"findings\"]').click();document.querySelector('[data-action=\"finding\"]').click()",
   );
   await evaluate(

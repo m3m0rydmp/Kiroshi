@@ -21,6 +21,7 @@ from .tools import ROOT, CATALOG, allowed, command, discover, rules, target_url
 from .readiness import FIELDS, NOTICE, content_hash, evaluate, normalize_review, related
 from .references import Collector, report_id
 from .http_identity import browser_user_agent
+from .traffic import Feedback, effective, normalize as normalize_traffic, HTTP_TOOLS
 
 MAX_LOG = 10 * 1024 * 1024
 
@@ -54,6 +55,7 @@ class App:
         self.process = None
         self.current = None
         self.collector = Collector()
+        self.tool_cache = None
         for job in self.all("job"):
             if job["status"] in ("queued", "running", "cancelling"):
                 job.update(status="interrupted", finished=now(), error="Server restarted; review output before rerunning")
@@ -88,8 +90,15 @@ class App:
         except ValueError:
             return {"id": "local", "paths": {}}
 
-    def tools(self):
-        return discover(self.settings()["paths"])
+    def tools(self, check=False):
+        paths = self.settings()["paths"]
+        key = tuple(sorted(paths.items()))
+        cached = self.tool_cache
+        if not check and cached and cached[0] == key and time.monotonic() - cached[1] < 5:
+            return cached[2]
+        found = discover(paths, check=check)
+        self.tool_cache = (key, time.monotonic(), found)
+        return found
 
     def workspace(self, engagement):
         return self.data / "engagements" / engagement["id"]
@@ -119,7 +128,8 @@ class App:
                               duration=bounded(payload.get("duration"), 300, 10, 3600),
                               provider=provider, authorized=True, updated=now(),
                               created=previous["created"] if previous else now(),
-                              user_agent=browser_user_agent())
+                              user_agent=browser_user_agent(),
+                              traffic=normalize_traffic(payload.get("traffic", previous.get("traffic", {}) if previous else {})))
             self.scaffold(engagement)
             return self.put("engagement", engagement)
 
@@ -140,6 +150,10 @@ Read scope.json before any action. Policy: {engagement['policy']}
 In scope: {', '.join(engagement['scope'])}
 Excluded: {', '.join(engagement['excluded']) or '(none specified)'}
 Maximum tool rate: {engagement['rate']}/second. Work in sessions of at most {engagement['duration']} seconds.
+Traffic settings: {json.dumps(engagement.get('traffic', {}), sort_keys=True)}
+Respect throttling and access-denied responses. Do not treat a WAF response as proof
+of a vulnerability or automatically retry blocked jobs. Request a program-approved
+test path or allowlisting when necessary. Do not broaden scope to avoid a block.
 Only test assets explicitly authorized by the policy. A program directory URL grants no target scope.
 Wildcards authorize subdomains only; apex domains require their own entry.
 Stop on unclear scope, exhausted budgets, or a blocked dependency. Record a handoff.
@@ -309,6 +323,7 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
         auth = self.selected_auth(payload, engagement)
         return dict(argv=args, display=shlex.join(args), duration=engagement["duration"],
                     workspace=str(self.workspace(engagement)), auth_id=auth["id"] if auth else None,
+                    traffic=effective(engagement, payload),
                     identity=auth["label"] if auth else "Anonymous",
                     auth_notice="Headers loaded from a private job config at execution" if auth else "No session headers")
 
@@ -417,6 +432,40 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
         except ProcessLookupError:
             pass
 
+    def gate_key(self, job):
+        import hashlib
+        parsed = urlsplit(job["target"] if "://" in job["target"] else "https://" + job["target"])
+        origin = f"{parsed.scheme.lower()}://{parsed.hostname}:{parsed.port or (443 if parsed.scheme == 'https' else 80)}"
+        return hashlib.sha256(f"{job['engagement_id']}:{origin}".encode()).hexdigest()[:24], origin
+
+    def traffic_gate(self, job):
+        if job["tool"] not in HTTP_TOOLS:
+            return None
+        key, _ = self.gate_key(job)
+        try:
+            gate = self.get("traffic_gate", key)
+        except ValueError:
+            return None
+        return gate if gate.get("manual_hold") or gate.get("until", 0) > time.time() else None
+
+    def set_traffic_gate(self, job, event):
+        key, origin = self.gate_key(job)
+        previous = self.traffic_gate(job) or {}
+        return self.put("traffic_gate", dict(id=key, engagement_id=job["engagement_id"], origin=origin,
+                                             until=max(previous.get("until", 0), time.time() + event["delay"]),
+                                             manual_hold=bool(event["manual_hold"] or previous.get("manual_hold")),
+                                             status_code=event["status_code"], job_id=job["id"], created=now(),
+                                             reason=event["reason"]))
+
+    def clear_traffic_gate(self, payload):
+        reason = str(payload.get("reason", "")).strip()[:1000]
+        if len(reason) < 10:
+            raise ValueError("Record why the traffic hold can be cleared (at least 10 characters)")
+        gate = self.get("traffic_gate", payload.get("id"))
+        gate.update(until=0, manual_hold=False, cleared_at=now(), clearance_reason=reason)
+        self.put("traffic_gate", gate)
+        return {"ok": True}
+
     def work(self):
         while not self.stop.is_set():
             try:
@@ -434,10 +483,19 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
         capped = threading.Event()
         expired = threading.Event()
         secret_files = []
+        feedback = None
+        blocked = None
         try:
             with self.lock:
                 job = self.get("job", key)
                 if job["status"] != "queued":
+                    return
+                gate = self.traffic_gate(job)
+                if gate:
+                    if job.get("waiting_for") != gate["id"]:
+                        job.update(waiting_for=gate["id"], not_before=gate["until"], manual_hold=gate["manual_hold"])
+                        self.put("job", job)
+                    self.jobs.put(key)
                     return
                 log = self.logpath(job)
                 log.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -490,7 +548,8 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
                                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                            stderr=subprocess.STDOUT, start_new_session=True)
                 self.process, self.current = process, key
-                job.update(status="running", started=now())
+                job.update(status="running", started=now(), waiting_for=None, not_before=None, manual_hold=False)
+                feedback = Feedback(job.get("traffic", effective(self.get("engagement", job["engagement_id"]), {"tool": job["tool"]})))
                 self.put("job", job)
 
             def expire():
@@ -517,6 +576,7 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
                         split = split or len(pending)
                         chunk, pending = pending[:split], pending[split:]
                     text = chunk.decode(errors="replace")
+                    observed = feedback.observe(text) if job["tool"] in HTTP_TOOLS else None
                     for value in sorted(headers.values(), key=len, reverse=True):
                         if value:
                             text = text.replace(value, "[REDACTED]").replace(json.dumps(value)[1:-1], "[REDACTED]")
@@ -525,6 +585,11 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
                     output.write(chunk[:remaining])
                     output.flush()
                     size += min(len(chunk), remaining)
+                    if job["tool"] in HTTP_TOOLS:
+                        blocked = observed
+                        if blocked:
+                            self.kill(process)
+                            break
                     if len(chunk) >= remaining:
                         capped.set()
                         self.kill(process)
@@ -537,9 +602,13 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
             with self.lock:
                 job = self.get("job", key)
                 status = ("cancelled" if job["status"] == "cancelling" or self.stop.is_set() else
+                          "rate_limited" if blocked and blocked["status_code"] == 429 else "blocked" if blocked else
                           "timed_out" if expired.is_set() else "output_limit" if capped.is_set() else
                           "completed" if code == 0 else "failed")
-                job.update(status=status, finished=now(), returncode=code)
+                job.update(status=status, finished=now(), returncode=code, traffic_events=feedback.events)
+                if blocked:
+                    job["error"] = f"Stopped on HTTP {blocked['status_code']}; review traffic feedback before rerunning"
+                    self.set_traffic_gate(job, blocked)
                 self.put("job", job)
                 self.extract(job)
         except Exception as exc:
@@ -559,6 +628,8 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
                     process.stdout.close()
             with self.lock:
                 self.current = self.process = None
+            if job.get("waiting_for"):
+                self.stop.wait(0.25)  # Requeue without starving other origins or busy-spinning.
 
     def extract(self, job):
         """Normalize observations; never auto-promote scanner output to verified findings."""
@@ -579,7 +650,9 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
             value = row.get("url") or row.get("host") or row.get("input")
             if not value and isinstance(request, dict):
                 value = request.get("endpoint")
-            if value:
+            response = row.get("response") if isinstance(row.get("response"), dict) else {}
+            status = row.get("status_code", row.get("status", response.get("status_code")))
+            if value and str(status) not in ("404", "410", "429", "503"):
                 self.cache_asset(job, str(value), row)
             if job["tool"] == "nuclei" and "template-id" in row:
                 info = row.get("info", {})
@@ -673,6 +746,7 @@ class Handler(BaseHTTPRequestHandler):
                                          jobs=self.app.all("job"), findings=[self.app.finding_view(f) for f in self.app.all("finding")],
                                          tools=self.app.tools(), sessions=self.app.all("auth"),
                                          assets=self.app.all("asset"), data_dir=str(self.app.data),
+                                         traffic_gates=[g for g in self.app.all("traffic_gate") if g.get("manual_hold") or g.get("until", 0) > time.time()],
                                          references=self.app.all("reference"), review_fields=FIELDS,
                                          reference_search_enabled=self.app.collector.configured(),
                                          http_user_agent=browser_user_agent()))
@@ -730,10 +804,15 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(paths, dict) or any(name not in CATALOG for name in paths):
                     raise ValueError("Invalid tool registry")
                 for value in paths.values():
-                    if not isinstance(value, str) or not Path(value).is_absolute() or not Path(value).is_file() or not os.access(value, os.X_OK):
+                    existing = self.app.settings()["paths"]
+                    if not isinstance(value, str) or not Path(value).is_absolute() or (value not in existing.values() and (not Path(value).is_file() or not os.access(value, os.X_OK))):
                         raise ValueError("Executable overrides must be absolute paths to executable files")
                 self.app.put("settings", dict(id="local", paths=paths))
                 return self.respond({"ok": True})
+            if path == "/api/tools/check":
+                return self.respond({"tools": self.app.tools(check=True)})
+            if path == "/api/traffic/clear":
+                return self.respond(self.app.clear_traffic_gate(payload))
             if path == "/api/handoff":
                 engagement = self.app.get("engagement", payload.get("engagement_id"))
                 text = str(payload.get("text", ""))[:50000]

@@ -10,11 +10,14 @@ There are no remote fonts, analytics, CDNs, or image dependencies.
 
 ## Start in WSL
 
+For a fresh machine, follow [installation and tool setup](docs/INSTALL.md).
+Tool paths shown by the UI are detected locally; they are not required paths.
+
 Requires Python 3.10+ and Bash. No Python packages, Node build, Docker, or model API
 keys are required to run the dashboard itself.
 
 ```bash
-cd ~/AI/hunt-dashboard
+cd hunt  # your cloned checkout
 ./hunt-dashboard
 ```
 
@@ -39,6 +42,8 @@ The process binds to IPv4 loopback only. Stop it with Ctrl+C.
    The normalized cache includes supported JSON URL/host observations and scoped
    Subfinder names. All runs retain capped text logs even when normalization finds
    no assets. Excluded discoveries are not promoted into the asset cache.
+   Newly parsed 404/410 misses and 429/503 responses remain in logs rather than
+   becoming discovered assets.
 4. On the engagement page, add a named session: exact origin, Cookie header value,
    and optional `Name: Value` headers such as Authorization or X-CSRF-Token.
    Use separate profiles for Account A, Account B, and different roles.
@@ -239,6 +244,7 @@ node --check dashboard/static/app.js
 # Optional: actual HTTP tool binaries against a temporary loopback-only fixture.
 python3 -u -m tests.integration_local
 python3 -u -m tests.redirect_check
+python3 -u -m tests.integration_traffic
 # Optional: installed Chrome, native DevTools pipe, temporary workspace only.
 node tests/browser_check.mjs
 ```
@@ -248,20 +254,9 @@ cache, request-token protection, Host validation, and cross-host redirect reject
 The Chrome smoke test checks engagement/session forms, masked previews, handoff edits,
 tool filtering, and mobile layout. No public targets are scanned.
 
-## GitHub fork
+## Distribution and credits
 
-This checkout has branch `dashboard-wsl`. To create your actual GitHub fork after
-authenticating GitHub CLI:
-
-```bash
-gh auth login
-gh repo fork 0xcucumbersalad/hunt --clone=false
-git remote rename origin upstream
-git remote add origin https://github.com/m3m0rydmp/hunt.git
-git add .
-git commit -m "Add local WSL engagement dashboard"
-git push -u origin dashboard-wsl
-```
-
-No GitHub fork is implied by creating a local branch. Keep upstream attribution
-and the original MIT license.
+Install the published fork using [INSTALL.md](docs/INSTALL.md). The original scaffold
+and methodology are by [0xcucumbersalad](https://github.com/0xcucumbersalad) in
+[0xcucumbersalad/hunt](https://github.com/0xcucumbersalad/hunt); the MIT attribution
+is retained. See [TRAFFIC.md](docs/TRAFFIC.md) for pacing and WAF-feedback limits.

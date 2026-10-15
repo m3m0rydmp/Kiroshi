@@ -34,6 +34,7 @@ const when = (s) =>
 const pill = (s) =>
   `<span class="pill ${esc(s)}">${esc(s.replaceAll("_", " "))}</span>`;
 const pending = (j) => ["queued", "running", "cancelling"].includes(j.status);
+const toolReady = (t) => t.runnable ?? (t.adapter && t.installed);
 const engagementName = (id) =>
   state.engagements.find((e) => e.id === id)?.name || "Engagement";
 const filtered = (rows) =>
@@ -89,7 +90,7 @@ function jobTable(jobs) {
       "No jobs yet",
       "Create an engagement, preview a command, then queue your first run.",
     );
-  return `<div class="table-wrap"><table><thead><tr><th>Tool / target</th><th>Engagement</th><th>Identity</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>${jobs.map((j) => `<tr><td><strong class="mono">${esc(j.tool)}</strong><div class="sub path">${esc(j.target)}</div></td><td>${esc(engagementName(j.engagement_id))}</td><td>${esc(j.identity || "Anonymous")}</td><td>${pill(j.status)}</td><td class="text-muted">${when(j.created)}</td><td><button class="btn small" data-action="log" data-id="${j.id}">Logs ↗</button></td></tr>`).join("")}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>Tool / target</th><th>Engagement</th><th>Identity</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>${jobs.map((j) => `<tr><td><strong class="mono">${esc(j.tool)}</strong><div class="sub path">${esc(j.target)}</div></td><td>${esc(engagementName(j.engagement_id))}</td><td>${esc(j.identity || "Anonymous")}</td><td>${pill(j.status)}${j.waiting_for ? `<div class="sub">${j.manual_hold ? "Manual traffic hold" : "Waiting for cooldown"}</div>` : ""}</td><td class="text-muted">${when(j.created)}</td><td><button class="btn small" data-action="log" data-id="${j.id}">Logs ↗</button></td></tr>`).join("")}</tbody></table></div>`;
 }
 function overview() {
   const installed = state.tools.filter((t) => t.installed),
@@ -211,7 +212,16 @@ function jobsView() {
         : "",
     ) +
     `<div class="toolbar">${engagementFilter()}<span class="text-muted">${state.jobs.filter(pending).length} pending · one worker</span></div>` +
+    trafficHolds() +
     panel("Execution history", jobTable(filtered(state.jobs)))
+  );
+}
+function trafficHolds() {
+  const holds = filtered(state.traffic_gates || []);
+  if (!holds.length) return "";
+  return panel(
+    "Traffic cooldowns",
+    `<div class="panel-body stack">${holds.map((g) => `<div class="session-card"><div class="row spread"><strong class="mono path">${esc(g.origin)}</strong>${pill("rate_limited")}</div><p>Observed HTTP ${g.status_code} · ${g.manual_hold ? "Manual hold: server requested a long wait" : "Queued runs wait until " + new Date(g.until * 1000).toLocaleString()}</p><p class="help">This signal does not establish that a WAF caused the response. The stopped job will not automatically retry.</p><button class="btn small" data-action="clear-traffic" data-id="${g.id}">Review hold</button></div>`).join("")}</div>`,
   );
 }
 function findingsView() {
@@ -311,7 +321,8 @@ function toolsView() {
   return (
     heading(
       "Your WSL toolchain",
-      `${state.tools.length} catalog entries. ${state.tools.filter((t) => t.installed && t.adapter).length} installed tools have runnable adapters.`,
+      `${state.tools.length} catalog entries. ${state.tools.filter(toolReady).length} installed tools have runnable adapters.`,
+      '<button class="btn" data-action="check-tools">Check binaries ↻</button>',
     ) +
     `<div class="note neutral"><strong>HTTP User-Agent</strong><br><code class="path">${esc(state.http_user_agent || "Restart the dashboard to load HTTP identity")}</code><p class="help">Used by the HTTP adapters and reference collector. Subfinder manages its own browser identity; DNS/TLS have no User-Agent.</p></div><div class="note neutral">Ready adapters can be launched from an engagement. Inventory-only entries are detected but require an adapter before this dashboard can run them. No tools are installed automatically.</div><div class="toolbar"><input id="tool-search" placeholder="Search tools or categories…" aria-label="Search toolchain"><select id="tool-filter" aria-label="Tool availability"><option value="all">All tools</option><option value="ready">Ready to run</option><option value="installed">Installed</option><option value="missing">Missing</option></select></div><div class="tool-grid" id="tool-grid">${toolCards(state.tools)}</div>`
   );
@@ -320,7 +331,7 @@ function toolCards(rows) {
   return rows
     .map(
       (t) =>
-        `<article class="tool-card"><div class="row spread"><h3>${esc(t.name)}</h3>${pill(t.installed ? (t.adapter ? "ready" : "installed") : "missing")}</div><p>${esc(t.description)}</p><code title="${esc(t.path || "Not found on WSL PATH")}">${esc(t.path || "Not found on WSL PATH")}</code><footer><span>${esc(t.category)} · ${t.adapter ? "Runnable adapter" : "Inventory only"}</span><button class="btn small" data-action="tool-path" data-id="${esc(t.name)}">Path</button></footer></article>`,
+        `<article class="tool-card"><div class="row spread"><h3>${esc(t.name)}</h3>${pill(t.installed ? (t.compatibility === "incompatible" ? "incompatible" : t.adapter ? "ready" : "installed") : "missing")}</div><p>${esc(t.description)}</p><code title="${esc(t.path || "Not found on WSL PATH")}">${esc(t.path || "Not found on WSL PATH")}</code><p class="help">${esc(t.source || "autodetected")} · ${esc(t.compatibility || "not_checked")}</p>${t.override_warning ? `<p class="help">${esc(t.override_warning)}</p>` : ""}<footer><span>${esc(t.category)} · ${t.adapter ? "Runnable adapter" : "Inventory only"}</span><button class="btn small" data-action="tool-path" data-id="${esc(t.name)}">Path</button></footer></article>`,
     )
     .join("");
 }
@@ -393,8 +404,13 @@ function engagementModal(id) {
   modal(
     id ? "Edit engagement" : "New engagement",
     "Define the authorized boundary before running tools.",
-    `<form id="engagement-form"><input type="hidden" name="id" value="${e.id || ""}"><div class="form-grid">${field("Engagement name", "name", e.name || "")}${field("Program / policy URL", "policy", e.policy || "")}<div><label>In-scope hosts (one per line)</label><textarea name="scope" required placeholder="example.com&#10;*.example.com">${esc((e.scope || []).join("\n"))}</textarea><div class="help">Hostnames/IPs only. A wildcard does not include the apex.</div></div><div><label>Excluded hosts</label><textarea name="excluded" placeholder="payments.example.com">${esc((e.excluded || []).join("\n"))}</textarea></div>${field("Rate limit / second", "rate", e.rate || 5, "number")}${field("Maximum job duration / seconds", "duration", e.duration || 300, "number")}<div><label>Preferred agent client</label><select name="provider"><option value="claude" ${e.provider === "claude" ? "selected" : ""}>Claude Code (your configured provider)</option><option value="codex" ${e.provider === "codex" ? "selected" : ""}>Codex</option></select></div><div><label>Program notes / constraints</label><textarea name="notes">${esc(e.notes || "")}</textarea></div><label class="check-label full"><input name="authorized" type="checkbox" required ${e.authorized ? "checked" : ""}>I have authorization for these assets and have reviewed the program’s testing rules.</label></div><div class="inline-error" id="form-error"></div><div class="form-actions"><button type="button" class="btn" data-action="close">Cancel</button><button class="btn primary">Save engagement</button></div></form>`,
+    `<form id="engagement-form"><input type="hidden" name="id" value="${e.id || ""}"><div class="form-grid">${field("Engagement name", "name", e.name || "")}${field("Program / policy URL", "policy", e.policy || "")}<div><label>In-scope hosts (one per line)</label><textarea name="scope" required placeholder="example.com&#10;*.example.com">${esc((e.scope || []).join("\n"))}</textarea><div class="help">Hostnames/IPs only. A wildcard does not include the apex.</div></div><div><label>Excluded hosts</label><textarea name="excluded" placeholder="payments.example.com">${esc((e.excluded || []).join("\n"))}</textarea></div>${field("Rate ceiling / second", "rate", e.rate || 5, "number")}${field("Maximum job duration / seconds", "duration", e.duration || 300, "number")}<div><label>Preferred agent client</label><select name="provider"><option value="claude" ${e.provider === "claude" ? "selected" : ""}>Claude Code (your configured provider)</option><option value="codex" ${e.provider === "codex" ? "selected" : ""}>Codex</option></select></div><div><label>Program notes / constraints</label><textarea name="notes">${esc(e.notes || "")}</textarea></div><label class="check-label full"><input name="authorized" type="checkbox" required ${e.authorized ? "checked" : ""}>I have authorization for these assets and have reviewed the program’s testing rules.</label></div>${trafficEditor(e)}<div class="inline-error" id="form-error"></div><div class="form-actions"><button type="button" class="btn" data-action="close">Cancel</button><button class="btn primary">Save engagement</button></div></form>`,
   );
+}
+function trafficEditor(e) {
+  const t = e.traffic || {};
+  const statuses = t.block_statuses || [429, 503];
+  return `<details class="review-section"><summary>Traffic & block-response controls</summary><div class="form-grid">${field("Worker concurrency (1–10)", "traffic_concurrency", t.concurrency || 1, "number")}${field("Request timeout (3–60 seconds)", "traffic_timeout", t.timeout || 10, "number")}${field("Consecutive block signals before stopping", "traffic_block_threshold", t.block_threshold || 1, "number")}${field("Minimum cooldown (seconds)", "traffic_cooldown", t.cooldown || 30, "number")}<div class="full"><label>Statuses to monitor</label><div class="row">${[429, 503, 403].map((code) => `<label class="check-label"><input name="block_${code}" type="checkbox" ${statuses.includes(code) ? "checked" : ""}>HTTP ${code}</label>`).join("")}</div><p class="help">403 is optional: access-denied responses often reflect expected permissions rather than a WAF.</p></div><label class="check-label full"><input name="traffic_stop_on_block" type="checkbox" ${t.stop_on_block !== false ? "checked" : ""}>Stop on observed block signals and cool down queued runs to this origin</label></div><p class="help">Feedback is limited to responses emitted by each scanner. This is not transparent WAF detection, challenge solving or a network firewall.</p></details>`;
 }
 function sessionModal(engagementId, sessionId) {
   const s = state.sessions.find((s) => s.id === sessionId) || {};
@@ -414,11 +430,11 @@ function runModal(engagementId, target = "") {
     engagementModal();
     return;
   }
-  const ready = state.tools.filter((t) => t.adapter && t.installed);
+  const ready = state.tools.filter(toolReady);
   modal(
     "New tool run",
     "Preview a bounded command. Existing recon stays cached.",
-    `<form id="run-form"><div class="form-grid"><div><label>Engagement</label><select name="engagement_id" id="run-engagement">${state.engagements.map((x) => `<option value="${x.id}" ${x.id === e.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></div><div><label>Tool / profile</label><select name="tool" id="run-tool">${ready.map((t) => `<option value="${t.name}" ${t.name === "httpx" ? "selected" : ""}>${esc(t.name)} — ${esc(t.description)}</option>`).join("")}</select></div><div class="full"><label>Target host or URL</label><input name="target" required value="${esc(target || "https://" + (e.scope.find((h) => !h.startsWith("*.")) || ""))}" placeholder="https://app.example.com"></div><div class="full"><label>Identity / session</label><select name="auth_id" id="run-session"></select><div class="help">HTTP sessions are sent only to their exact origin. DNS/recon/TLS profiles use Anonymous.</div></div></div><div class="note neutral">Nuclei runs the bundled server-header inventory template. Content discovery uses a small bundled wordlist. Broader templates and wordlists need an adapter extension.</div><div class="preview-box" id="command-preview"></div><div class="inline-error" id="form-error"></div><div class="form-actions"><button type="button" class="btn" data-action="preview">Preview command</button><button class="btn primary" ${ready.length ? "" : "disabled"}>Queue run →</button></div></form>`,
+    `<form id="run-form"><div class="form-grid"><div><label>Engagement</label><select name="engagement_id" id="run-engagement">${state.engagements.map((x) => `<option value="${x.id}" ${x.id === e.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></div><div><label>Tool / profile</label><select name="tool" id="run-tool">${ready.map((t) => `<option value="${t.name}" ${t.name === "httpx" ? "selected" : ""}>${esc(t.name)} — ${esc(t.description)}</option>`).join("")}</select></div><div class="full"><label>Target host or URL</label><input name="target" required value="${esc(target || "https://" + (e.scope.find((h) => !h.startsWith("*.")) || ""))}" placeholder="https://app.example.com"></div><div class="full"><label>Identity / session</label><select name="auth_id" id="run-session"></select><div class="help">HTTP sessions are sent only to their exact origin. DNS/recon/TLS profiles use Anonymous.</div></div></div>${runTrafficFields(e)}<div class="note neutral">Nuclei runs the bundled server-header inventory template. Content discovery uses a small bundled wordlist. Broader templates and wordlists need an adapter extension.</div><div class="preview-box" id="command-preview"></div><div class="inline-error" id="form-error"></div><div class="form-actions"><button type="button" class="btn" data-action="preview">Preview command</button><button class="btn primary" ${ready.length ? "" : "disabled"}>Queue run →</button></div></form>`,
   );
   updateRunSessions();
 }
@@ -439,6 +455,32 @@ function updateRunSessions() {
       )
       .join("");
   $("#command-preview").innerHTML = "";
+  updateRunTraffic();
+}
+function runTrafficFields(e) {
+  return `<details class="review-section"><summary>Run pacing</summary><div class="form-grid"><div><label>Traffic profile</label><select name="traffic_profile" id="run-traffic-profile"><option value="inherit">Engagement settings</option><option value="gentle">Gentle · 1 request/sec, 1 worker</option></select></div>${field("Run rate (cannot exceed engagement ceiling)", "rate", e.rate, "number")}<div><label>Extra delay (milliseconds)</label><input name="delay_ms" type="number" min="0" max="60000" value="0"><p class="help">Supported by httpx, Katana, ffuf and tlsx.</p></div><div><label>Delay jitter (milliseconds)</label><input name="jitter_ms" type="number" min="0" max="5000" value="0"><p class="help">ffuf only. Controls are disabled for unsupported adapters.</p></div></div><p class="help" id="run-traffic-note"></p></details>`;
+}
+function updateRunTraffic() {
+  const form = $("#run-form");
+  if (!form) return;
+  const tool = form.elements.tool.value,
+    gentle = form.elements.traffic_profile.value === "gentle";
+  const e = state.engagements.find(
+    (e) => e.id === form.elements.engagement_id.value,
+  );
+  form.elements.rate.max = e.rate;
+  form.elements.rate.value = Math.min(
+    Number(form.elements.rate.value) || e.rate,
+    e.rate,
+  );
+  form.elements.rate.disabled = gentle;
+  form.elements.delay_ms.disabled =
+    gentle || !["httpx", "katana", "ffuf", "tlsx"].includes(tool);
+  form.elements.jitter_ms.disabled = gentle || tool !== "ffuf";
+  if (form.elements.delay_ms.disabled) form.elements.delay_ms.value = 0;
+  if (form.elements.jitter_ms.disabled) form.elements.jitter_ms.value = 0;
+  $("#run-traffic-note").textContent =
+    `Engagement ceiling: ${e.rate}/s. Retries are disabled where supported. Block feedback depends on scanner output; a 403 alone does not identify a WAF.`;
 }
 function findingModal(id) {
   const f = state.findings.find((f) => f.id === id) || {};
@@ -520,7 +562,17 @@ async function updateLog() {
   const { job, output } = await api(`jobs/${id}/log`);
   if (activeLog !== id) return;
   $("#job-meta").innerHTML =
-    `<div class="log-toolbar"><div class="row"><strong class="mono">${esc(job.tool)}</strong>${pill(job.status)}<span class="text-muted">${esc(job.identity || "Anonymous")}</span></div><div class="row"><a class="btn small" href="/api/jobs/${job.id}/download" download>Download</a><button class="btn small" data-action="rerun" data-id="${job.id}">Run again</button>${pending(job) ? `<button class="btn small danger" data-action="cancel-job" data-id="${job.id}">Cancel job</button>` : ""}</div></div><p class="help path">${esc(job.display)}</p><p class="help">${job.error ? esc(job.error) : "Exit code: " + (job.returncode ?? "pending")}</p>`;
+    `<div class="log-toolbar"><div class="row"><strong class="mono">${esc(job.tool)}</strong>${pill(job.status)}<span class="text-muted">${esc(job.identity || "Anonymous")}</span></div><div class="row"><a class="btn small" href="/api/jobs/${job.id}/download" download>Download</a><button class="btn small" data-action="rerun" data-id="${job.id}">Run again</button>${pending(job) ? `<button class="btn small danger" data-action="cancel-job" data-id="${job.id}">Cancel job</button>` : ""}</div></div><p class="help path">${esc(job.display)}</p><p class="help">${job.error ? esc(job.error) : "Exit code: " + (job.returncode ?? "pending")}</p>${
+      (job.traffic_events || []).length
+        ? `<div class="note neutral">${job.traffic_events
+            .map(
+              (e) =>
+                `Observed HTTP ${e.status_code}; minimum cooldown ${e.delay}s${e.manual_hold ? " · manual hold" : ""}`,
+            )
+            .map(esc)
+            .join("<br>")}</div>`
+        : ""
+    }`;
   const pre = $("#job-output");
   const bottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 35;
   pre.textContent = output;
@@ -588,7 +640,7 @@ document.addEventListener("click", async (event) => {
         const data = Object.fromEntries(new FormData($("#run-form")));
         const p = await api("jobs/preview", data);
         $("#command-preview").innerHTML =
-          `<label>COMMAND PREVIEW · ${esc(p.identity)} · ${p.duration}s limit</label><pre class="terminal">${esc(p.display)}</pre><p class="help">${esc(p.auth_notice)}</p>`;
+          `<label>COMMAND PREVIEW · ${esc(p.identity)} · ${p.duration}s limit</label><pre class="terminal">${esc(p.display)}</pre><p class="help">${esc(p.auth_notice)}</p><p class="help">${p.traffic.rate}/s · ${p.traffic.concurrency} worker(s) · ${p.traffic.timeout}s timeout · ${p.traffic.delay_ms}ms delay · ${p.traffic.jitter_ms}ms jitter</p>`;
         break;
       }
       case "log":
@@ -647,8 +699,29 @@ document.addEventListener("click", async (event) => {
         const tool = state.tools.find((t) => t.name === id);
         modal(
           "Configure " + esc(id),
-          "Use an absolute path to an existing WSL executable.",
-          `<form id="path-form"><input type="hidden" name="tool" value="${esc(id)}">${field("Executable path", "path", tool.path || "")}<div class="inline-error" id="form-error"></div><div class="form-actions"><button class="btn primary">Save executable path</button></div></form>`,
+          "Paths belong to this installation only. Leave the override empty to use autodetection.",
+          `<form id="path-form"><input type="hidden" name="tool" value="${esc(id)}">${field("Executable path override", "path", tool.configured_path || "")}<p class="help path">Autodetected: ${esc(tool.detected_path || "Not found")} · ${esc(tool.diagnostic || "")}</p><div class="inline-error" id="form-error"></div><div class="form-actions"><button class="btn primary">Save executable path</button></div></form>`,
+        );
+        break;
+      }
+      case "check-tools": {
+        el.disabled = true;
+        el.textContent = "Checking…";
+        try {
+          await api("tools/check", {});
+          await refresh();
+          toast("Local adapter compatibility checked");
+        } finally {
+          el.disabled = false;
+        }
+        break;
+      }
+      case "clear-traffic": {
+        const gate = (state.traffic_gates || []).find((g) => g.id === id);
+        modal(
+          "Review traffic hold",
+          "Clearing this hold allows queued runs to resume. Confirm the program permits your next test.",
+          `<form id="traffic-clear-form"><input name="id" type="hidden" value="${id}"><p class="mono path">${esc(gate.origin)} · HTTP ${gate.status_code}</p><label>Reason for clearing the hold</label><textarea name="reason" required minlength="10" placeholder="Program-approved retest after adjusting the request rate…"></textarea><div class="inline-error" id="form-error"></div><div class="form-actions"><button class="btn primary">Clear traffic hold</button></div></form>`,
         );
         break;
       }
@@ -676,6 +749,19 @@ document.addEventListener("submit", async (event) => {
   try {
     if (form.getAttribute("id") === "engagement-form") {
       data.authorized = form.elements.authorized.checked;
+      data.traffic = {
+        concurrency: data.traffic_concurrency,
+        timeout: data.traffic_timeout,
+        block_threshold: data.traffic_block_threshold,
+        cooldown: data.traffic_cooldown,
+        stop_on_block: form.elements.traffic_stop_on_block.checked,
+        block_statuses: [429, 503, 403].filter(
+          (code) => form.elements["block_" + code].checked,
+        ),
+      };
+      for (const key of Object.keys(data))
+        if (key.startsWith("traffic_") || key.startsWith("block_"))
+          delete data[key];
       if (!data.id) delete data.id;
       const e = await api("engagements", data);
       selected = e.id;
@@ -726,10 +812,15 @@ document.addEventListener("submit", async (event) => {
       return;
     } else if (form.getAttribute("id") === "path-form") {
       const paths = Object.fromEntries(
-        state.tools.filter((t) => t.path).map((t) => [t.name, t.path]),
+        state.tools
+          .filter((t) => t.configured_path)
+          .map((t) => [t.name, t.configured_path]),
       );
-      paths[data.tool] = data.path;
+      if (data.path.trim()) paths[data.tool] = data.path.trim();
+      else delete paths[data.tool];
       await api("settings", { paths });
+    } else if (form.getAttribute("id") === "traffic-clear-form") {
+      await api("traffic/clear", data);
     } else return;
     closeModal();
     await refresh();
@@ -739,6 +830,7 @@ document.addEventListener("submit", async (event) => {
   }
 });
 document.addEventListener("change", (event) => {
+  if (event.target.id === "run-traffic-profile") updateRunTraffic();
   if (event.target.id === "reference-filter") filterReferences();
   if (event.target.id === "engagement-filter") {
     selected = event.target.value;

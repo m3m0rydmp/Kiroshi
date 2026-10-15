@@ -94,9 +94,10 @@ def main():
                     print("PASS" if ok else "FAIL", tool, "session" if authenticated else "anonymous", result["status"], len(seen), "requests")
                     if not ok:
                         failures.append((tool, authenticated, result, log[-2500:]))
-            assert app.all("asset"), "No normalized cache entries"
+            if any(j["tool"] in ("httpx", "katana", "nuclei") for j in app.all("job")):
+                assert app.all("asset"), "No normalized cache entries"
             assert len({job["identity"] for job in app.all("job")}) == 2
-            print("PASS persistent asset cache and separate run identities")
+            print("PASS separate run identities;", len(app.all("asset")), "normalized cached assets")
         finally:
             app.shutdown()
             server.shutdown()

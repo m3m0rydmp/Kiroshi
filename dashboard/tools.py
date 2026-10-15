@@ -3,9 +3,11 @@ import ipaddress
 import os
 from pathlib import Path
 import re
-import shutil
+import subprocess
+import math
 from urllib.parse import urlsplit
 from .http_identity import browser_user_agent
+from .traffic import effective
 
 ROOT = Path(__file__).resolve().parent.parent
 CATALOG = {
@@ -48,16 +50,63 @@ CATALOG = {
 }
 
 
-def discover(overrides=None):
+SIGNATURES = {
+    "subfinder": ("-max-time", "-rate-limit"), "dnsx": ("-rcode", "-resp-only"),
+    "httpx": ("-status-code", "-no-fallback-scheme"), "tlsx": ("-tls-version", "-scan-mode"),
+    "katana": ("-crawl-scope", "-disable-redirects"), "feroxbuster": ("--no-recursion", "--rate-limit"),
+    "ffuf": ("-maxtime", "-noninteractive"), "nuclei": ("-no-interactsh", "-disable-redirects"),
+}
+_PROBES = {}
+
+
+def probe(name, path, run=False):
+    if name not in SIGNATURES or not path:
+        return {"compatibility": "not_checked", "diagnostic": "No adapter compatibility check available"}
+    try:
+        stat = Path(path).stat()
+    except OSError:
+        return {"compatibility": "incompatible", "diagnostic": "Executable is unavailable"}
+    key = (name, path, stat.st_mtime_ns, stat.st_size)
+    if key not in _PROBES and run:
+        try:
+            result = subprocess.run([path, "--help" if name == "feroxbuster" else "-h"],
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    text=True, errors="replace", timeout=3, stdin=subprocess.DEVNULL)
+            missing = [flag for flag in SIGNATURES[name] if flag not in result.stdout]
+            _PROBES[key] = dict(compatibility="incompatible" if missing else "compatible",
+                                diagnostic="Missing expected help flags: " + ", ".join(missing) if missing else "Expected adapter flags detected")
+        except (OSError, subprocess.SubprocessError):
+            _PROBES[key] = dict(compatibility="incompatible", diagnostic="Could not read help within 3 seconds")
+    return _PROBES.get(key, dict(compatibility="not_checked", diagnostic="Run Check binaries or the installation doctor"))
+
+
+def discover(overrides=None, check=False):
     overrides = overrides or {}
     dirs = [str(Path.home() / p) for p in (".pdtm/go/bin", "go/bin", ".cargo/bin", ".local/bin")]
-    search = os.pathsep.join(dirs + [os.environ.get("PATH", "")])
+    if os.environ.get("GOBIN"):
+        dirs.insert(0, os.environ["GOBIN"])
+    dirs += [str(Path(p) / "bin") for p in os.environ.get("GOPATH", "").split(os.pathsep) if p]
+    dirs += os.environ.get("PATH", "").split(os.pathsep)
+    dirs = list(dict.fromkeys(os.path.abspath(os.path.expanduser(p)) for p in dirs if p))
     tools = []
     for name, (category, description, adapter) in CATALOG.items():
-        path = overrides.get(name) or shutil.which(name, path=search)
-        found = bool(path and Path(path).is_file() and os.access(path, os.X_OK))
+        candidates = [str(Path(directory) / name) for directory in dirs
+                      if (Path(directory) / name).is_file() and os.access(Path(directory) / name, os.X_OK)]
+        # Python's unrelated httpx CLI commonly shadows ProjectDiscovery httpx.
+        detected = next((p for p in candidates if name != "httpx" or probe(name, p, run=True)["compatibility"] == "compatible"), None)
+        override = overrides.get(name)
+        valid_override = bool(override and Path(override).is_file() and os.access(override, os.X_OK))
+        path = override if valid_override else detected
+        found = bool(path)
+        diagnostic = probe(name, path, run=check and adapter)
         tools.append(dict(name=name, category=category, description=description,
-                          adapter=adapter, installed=found, path=str(path) if found else None))
+                          adapter=adapter, installed=found, path=path,
+                          detected_path=detected, configured_path=override,
+                          override_active=valid_override,
+                          source="override" if valid_override else "autodetected" if found else "missing",
+                          override_warning="Saved path is unavailable; using autodetection" if override and not valid_override else None,
+                          runnable=bool(found and adapter and diagnostic["compatibility"] != "incompatible"),
+                          **diagnostic))
     return tools
 
 
@@ -127,7 +176,10 @@ def command(engagement, payload, tools):
         raise ValueError("This tool is inventory-only; an adapter is required")
     if not item["installed"]:
         raise ValueError("Tool not installed; configure its executable path in Toolchain")
-    rate = str(engagement["rate"])
+    if item.get("compatibility") == "incompatible":
+        raise ValueError("Tool is incompatible with its adapter: " + item["diagnostic"])
+    traffic = effective(engagement, payload)
+    rate, concurrency, timeout = str(traffic["rate"]), str(traffic["concurrency"]), str(traffic["timeout"])
     url, name, port = target_url(payload.get("target", ""), engagement)
     exe = item["path"]
     duration = engagement["duration"]
@@ -135,26 +187,34 @@ def command(engagement, payload, tools):
     wordlist = str(ROOT / "dashboard" / "wordlist.txt")
     if tool == "subfinder":
         # Passive collection may discover excluded names, but never probes them.
-        args = [exe, "-d", name, *common, "-rl", rate, "-timeout", "10", "-max-time", "2"]
+        args = [exe, "-d", name, *common, "-rl", rate, "-timeout", timeout, "-max-time", "2"]
     elif tool == "dnsx":
-        args = [exe, "-l", name, *common, "-a", "-aaaa", "-cname", "-j", "-t", "1", "-rl", rate]
+        args = [exe, "-l", name, *common, "-a", "-aaaa", "-cname", "-j", "-t", concurrency, "-rl", rate, "-timeout", timeout + "s"]
     elif tool == "httpx":
-        args = [exe, "-u", url, *common, "-j", "-sc", "-title", "-td", "-location", "-t", "1", "-rl", rate, "-timeout", "10", "-retries", "0", "-nfs"]
+        args = [exe, "-u", url, *common, "-j", "-sc", "-title", "-td", "-location", "-irh", "-t", concurrency, "-rl", rate, "-timeout", timeout, "-retries", "0", "-nfs"]
+        if traffic["delay_ms"]:
+            args += ["-delay", f"{traffic['delay_ms']}ms"]
     elif tool == "tlsx":
-        args = [exe, "-u", name, "-p", str(port or 443), *common, "-j", "-san", "-cn", "-tv", "-c", "1", "-retry", "0", "-timeout", "10", "-delay", f"{1 / engagement['rate']:.3f}s"]
+        delay = max(1 / traffic["rate"], traffic["delay_ms"] / 1000)
+        args = [exe, "-u", name, "-p", str(port or 443), *common, "-j", "-san", "-cn", "-tv", "-c", "1", "-retry", "0", "-timeout", timeout, "-delay", f"{delay:.3f}s"]
     elif tool == "katana":
         # Crawl only the selected origin, even if engagement scope is broader.
         parsed = urlsplit(url)
         origin = re.escape(f"{parsed.scheme}://{parsed.netloc}")
-        args = [exe, "-u", url, *common, "-j", "-dr", "-d", "2", "-cs", f"^{origin}(?:/|$)", "-c", "1", "-p", "1", "-rl", rate, "-ct", f"{duration}s", "-timeout", "10", "-retry", "0"]
+        args = [exe, "-u", url, *common, "-j", "-dr", "-d", "2", "-cs", f"^{origin}(?:/|$)", "-c", concurrency, "-p", "1", "-rl", rate, "-ct", f"{duration}s", "-timeout", timeout, "-retry", "0"]
+        if traffic["delay_ms"]:
+            args += ["-rd", str(math.ceil(traffic["delay_ms"] / 1000))]
     elif tool == "feroxbuster":
-        args = [exe, "-u", url, "-w", wordlist, "--no-recursion", "--dont-extract-links", "--no-state", "--rate-limit", rate, "--threads", "1", "--time-limit", f"{duration}s", "--timeout", "10", "--json", "--silent"]
+        args = [exe, "-u", url, "-w", wordlist, "--no-recursion", "--dont-extract-links", "--no-state", "--rate-limit", rate, "--threads", concurrency, "--scan-limit", "1", "--auto-bail" if traffic["stop_on_block"] else "--auto-tune", "--time-limit", f"{duration}s", "--timeout", timeout, "--json", "--silent"]
     elif tool == "ffuf":
         if urlsplit(url).query:
             raise ValueError("Path discovery targets cannot contain a query")
-        args = [exe, "-u", url.rstrip("/") + "/FUZZ", "-w", wordlist, "-rate", rate, "-t", "1", "-maxtime", str(duration), "-timeout", "10", "-json", "-noninteractive"]
+        args = [exe, "-u", url.rstrip("/") + "/FUZZ", "-w", wordlist, "-rate", rate, "-t", concurrency, "-maxtime", str(duration), "-timeout", timeout, "-mc", "all", "-json", "-noninteractive"]
+        if traffic["delay_ms"] or traffic["jitter_ms"]:
+            start, end = traffic["delay_ms"] / 1000, (traffic["delay_ms"] + traffic["jitter_ms"]) / 1000
+            args += ["-p", f"{start:.3f}-{end:.3f}" if end > start else f"{start:.3f}"]
     else:
-        args = [exe, "-u", url, "-t", str(ROOT / "dashboard" / "templates" / "server-header.yaml"), *common, "-j", "-nc", "-dr", "-ni", "-nh", "-no-stdin", "-rl", rate, "-c", "1", "-bs", "1", "-timeout", "10", "-retries", "0"]
+        args = [exe, "-u", url, "-t", str(ROOT / "dashboard" / "templates" / "server-header.yaml"), *common, "-j", "-nc", "-dr", "-ni", "-nh", "-no-stdin", "-rl", rate, "-c", concurrency, "-bs", "1", "-timeout", timeout, "-retries", "0"]
     user_agent = browser_user_agent()
     if tool in ("httpx", "katana", "nuclei", "ffuf"):
         args += ["-H", "User-Agent: " + user_agent]
