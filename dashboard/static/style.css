@@ -9,6 +9,23 @@
   --green: #88d9ab;
   --red: #fa8a90;
 }
+.brand .brand-word {
+  font-size: 34px;
+  color: #f1eaff;
+}
+.brand .brand-mark {
+  display: none;
+}
+@media (max-width: 720px) {
+  .brand .brand-word {
+    display: none;
+  }
+  .brand .brand-mark {
+    display: inline;
+    font-size: 30px;
+    color: #a9eaf4;
+  }
+}
 * {
   box-sizing: border-box;
 }
@@ -824,7 +841,7 @@ a:focus-visible {
   }
 }
 
-/* Afterglow: moonlight cyan, lilac and a coral sunset. */
+/* Palette: moonlight cyan, lilac and a coral sunset. */
 :root {
   --bg: #10101d;
   --panel: #191827;

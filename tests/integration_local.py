@@ -28,7 +28,7 @@ class Fixture(BaseHTTPRequestHandler):
             self.send_header("Location", "http://localhost:1/outside-scope")
             self.end_headers()
             return
-        body = b'<html><title>Hunt lab</title><a href="/inside">Inside</a><a href="http://localhost:1/outside-scope">Outside</a></html>'
+        body = b'<html><title>Kiroshi lab</title><a href="/inside">Inside</a><a href="http://localhost:1/outside-scope">Outside</a></html>'
         self.send_response(200 if self.path in ("/", "/inside", "/robots.txt") else 404)
         self.send_header("Content-Type", "text/html")
         self.send_header("Content-Length", str(len(body)))
@@ -64,10 +64,10 @@ def main():
                 assert exc.code == 403
             print("PASS HTTP UI/API, request-token and Host protections")
             e = app.save_engagement(dict(name="Loopback fixture", scope="127.0.0.1", excluded="", authorized=True, duration=30, rate=10))
-            auth = app.save_auth(dict(engagement_id=e["id"], label="Account A", origin=origin, cookie="hunt_session=local-secret", headers="Authorization: Bearer local-only-token"))
+            auth = app.save_auth(dict(engagement_id=e["id"], label="Account A", origin=origin, cookie="kiroshi_session=local-secret", headers="Authorization: Bearer local-only-token"))
             installed = {tool["name"] for tool in app.tools() if tool["installed"]}
             for tool in ("httpx", "katana", "feroxbuster", "ffuf", "nuclei"):
-                selected_tools = os.environ.get("HUNT_TEST_TOOLS", "").split(",")
+                selected_tools = os.environ.get("KIROSHI_TEST_TOOLS", "").split(",")
                 if selected_tools != [""] and tool not in selected_tools:
                     continue
                 if tool not in installed:
@@ -86,7 +86,7 @@ def main():
                     ok = result["status"] == "completed" and bool(seen)
                     ok = ok and all(row["user_agent"] == browser_user_agent() for row in seen)
                     if authenticated:
-                        ok = ok and all(row["cookie"] == "hunt_session=local-secret" and row["authorization"] == "Bearer local-only-token" for row in seen)
+                        ok = ok and all(row["cookie"] == "kiroshi_session=local-secret" and row["authorization"] == "Bearer local-only-token" for row in seen)
                     else:
                         ok = ok and all(row["cookie"] is None and row["authorization"] is None for row in seen)
                     log = app.logpath(job).read_text() if app.logpath(job).exists() else ""

@@ -1,4 +1,4 @@
-# Installing Hunt
+# Installing Kiroshi
 
 ## Platform and prerequisites
 
@@ -23,13 +23,13 @@ Claude Code/Codex and their provider credentials are separate optional installat
 ## Clone the published fork
 
 ```bash
-git clone https://github.com/m3m0rydmp/hunt.git
-cd hunt
+git clone https://github.com/m3m0rydmp/Kiroshi.git
+cd Kiroshi
 bash install.sh
-./hunt-dashboard
+./kiroshi
 ```
 
-The URL assumes the fork is published as `m3m0rydmp/hunt`. Change it if renamed.
+The URL assumes the fork is published as `m3m0rydmp/Kiroshi`. Change it if renamed.
 If the dashboard is only on `dashboard-wsl`, add `--branch dashboard-wsl` to clone.
 The `install.sh` script never downloads tools, runs sudo, starts a background service,
 or makes target requests. It checks Python, creates a symlink launcher, and runs the
@@ -42,7 +42,7 @@ bash install.sh --check-only
 bash install.sh --bin-dir "$HOME/bin"
 ```
 
-To use `hunt-dashboard` from any directory, add the chosen launcher directory to PATH.
+To use `kiroshi` from any directory, add the chosen launcher directory to PATH.
 For the default directory:
 
 ```bash
@@ -59,14 +59,14 @@ Open **http://localhost:8741** in your browser. Keep the WSL/Linux terminal open
 Ctrl+C stops the server. After reboot, open the Linux terminal and run:
 
 ```bash
-hunt-dashboard
+kiroshi
 ```
 
-Or `cd` to the checkout and run `./hunt-dashboard` if PATH was not configured.
+Or `cd` to the checkout and run `./kiroshi` if PATH was not configured.
 No automatic boot service is installed. A different port/data location is optional:
 
 ```bash
-./hunt-dashboard --port 8742 --data-dir "$HOME/.local/share/hunt-dashboard"
+./kiroshi --port 8742 --data-dir "$HOME/.local/share/kiroshi"
 ```
 
 Changing data directories opens a different workspace; it does not migrate existing
@@ -129,7 +129,7 @@ behavior can clear each unwanted override with an empty value.
 python3 -m dashboard.doctor
 python3 -m dashboard.doctor --json
 python3 -m dashboard.doctor --require-tools
-python3 -m dashboard.doctor --data-dir "$HOME/.local/share/hunt-dashboard"
+python3 -m dashboard.doctor --data-dir "$HOME/.local/share/kiroshi"
 ```
 
 `--require-tools` exits nonzero if any of the eight scan adapters is missing or
@@ -153,12 +153,27 @@ installed:
 ```bash
 git pull --ff-only
 bash install.sh --check-only
-./hunt-dashboard
+./kiroshi
 ```
 
-Back up the selected data directory separately. `.hunt-data/` contains credentials,
+Back up the selected data directory separately. `.kiroshi-data/` contains credentials,
 machine-local paths and evidence and is ignored by Git; do not publish it. Put any
 custom data directory outside the checkout. Tool versions and absolute paths in
 old job records are historical evidence, not portable installation settings.
 
 For the original scaffold-only CLI, see [SCAFFOLD.md](SCAFFOLD.md).
+
+## Existing local installations
+
+The canonical launcher is `kiroshi`; the earlier `hunt-dashboard` launcher remains
+a compatibility entry point. Existing `.hunt-data/` directories and `hunt.sqlite3`
+databases are opened in place when the new names do not already exist, preserving
+stored paths and evidence. New installations use `.kiroshi-data/kiroshi.sqlite3`.
+Runtime directories for both layouts are ignored by Git. No data is copied or
+deleted automatically. If both directories exist, select the intended one explicitly
+with `--data-dir`; the new default directory takes precedence.
+
+Configuration now uses `KIROSHI_USER_AGENT`, `KIROSHI_H1_API_USERNAME` and
+`KIROSHI_H1_API_TOKEN`. Earlier `HUNT_` environment names remain supported as
+fallbacks, with canonical names taking precedence. Rerun `bash install.sh` to add
+the canonical launcher to this machine.

@@ -5,6 +5,7 @@
 # */cleanup.md
 
 .DS_Store
+.kiroshi-data/
 .hunt-data/
 __pycache__/
 *.pyc

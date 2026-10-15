@@ -1,6 +1,6 @@
 # Traffic controls and WAF behavior
 
-Hunt exposes bounded controls on supported adapters. It is **not a general WAF
+Kiroshi exposes bounded controls on supported adapters. It is **not a general WAF
 evasion or exploitation framework**. A browser User-Agent alone does not reproduce
 a browser's TLS fingerprint, JavaScript behavior, cookies or application state.
 Challenges and access denials are recorded as observations, not confirmed WAF

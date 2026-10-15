@@ -12,6 +12,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import build_opener, HTTPRedirectHandler, ProxyHandler, Request
 from .http_identity import browser_user_agent
+from .config import environment
 
 MAX_BYTES = 2 * 1024 * 1024
 
@@ -96,11 +97,11 @@ class Collector:
 
     @staticmethod
     def configured():
-        return bool(os.environ.get("HUNT_H1_API_USERNAME") and os.environ.get("HUNT_H1_API_TOKEN"))
+        return bool(environment("H1_API_USERNAME") and environment("H1_API_TOKEN"))
 
     def discover(self, query="", page=1):
         if not self.configured():
-            raise ValueError("Discovery requires HUNT_H1_API_USERNAME and HUNT_H1_API_TOKEN in the server environment. Importing public URLs needs no API key.")
+            raise ValueError("Discovery requires KIROSHI_H1_API_USERNAME and KIROSHI_H1_API_TOKEN in the server environment. Importing public URLs needs no API key.")
         if not isinstance(query, str) or len(query) > 400 or any(ord(c) < 32 for c in query):
             raise ValueError("Search query must be at most 400 characters")
         page = int(page)
@@ -108,7 +109,7 @@ class Collector:
             raise ValueError("Page must be between 1 and 100")
         query = "disclosed:true" + (f" AND ({query})" if query.strip() else "")
         parameters = urlencode({"queryString": query, "sort": "-disclosed_at", "page[size]": 10, "page[number]": page})
-        credentials = f"{os.environ['HUNT_H1_API_USERNAME']}:{os.environ['HUNT_H1_API_TOKEN']}"
+        credentials = f"{environment('H1_API_USERNAME')}:{environment('H1_API_TOKEN')}"
         authorization = "Basic " + base64.b64encode(credentials.encode()).decode()
         with self.lock:
             delay = 1 - (time.monotonic() - self.last_fetch)

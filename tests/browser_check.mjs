@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
 
-const directory = await mkdtemp(join(tmpdir(), "hunt-browser-"));
+const directory = await mkdtemp(join(tmpdir(), "kiroshi-browser-"));
 const server = spawn(
   "python3",
   [
@@ -35,7 +35,7 @@ try {
     server.on("error", reject);
   });
   chrome = spawn(
-    process.env.HUNT_CHROME || "/usr/bin/google-chrome",
+    process.env.KIROSHI_CHROME || "/usr/bin/google-chrome",
     [
       "--headless=new",
       "--no-sandbox",
@@ -126,7 +126,7 @@ try {
     );
   };
   await wait(
-    "document.querySelector('h1')?.textContent.includes('hunt starts')",
+    "document.querySelector('h1')?.textContent.includes('next finding starts')",
   );
   assert.equal(await evaluate("document.querySelectorAll('.stat').length"), 4);
   const screenshot = await page("Page.captureScreenshot", {
@@ -134,7 +134,7 @@ try {
     captureBeyondViewport: true,
   });
   await writeFile(
-    "/tmp/hunt-dashboard-overview.png",
+    "/tmp/kiroshi-overview.png",
     Buffer.from(screenshot.data, "base64"),
   );
   await evaluate(
@@ -256,7 +256,7 @@ try {
     captureBeyondViewport: true,
   });
   await writeFile(
-    "/tmp/hunt-dashboard-review.png",
+    "/tmp/kiroshi-review.png",
     Buffer.from(reviewShot.data, "base64"),
   );
   await evaluate(
@@ -299,14 +299,14 @@ try {
     captureBeyondViewport: true,
   });
   await writeFile(
-    "/tmp/hunt-dashboard-mobile.png",
+    "/tmp/kiroshi-mobile.png",
     Buffer.from(mobile.data, "base64"),
   );
   console.log(
     "PASS browser: overview, engagements, sessions, command previews, handoff, tools, report readiness gate, confirmed review, reference dialogs, mobile layout",
   );
   console.log(
-    "Screenshots: /tmp/hunt-dashboard-overview.png and /tmp/hunt-dashboard-mobile.png",
+    "Screenshots: /tmp/kiroshi-overview.png and /tmp/kiroshi-mobile.png",
   );
   await cdp("Browser.close").catch(() => {});
 } finally {

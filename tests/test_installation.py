@@ -59,7 +59,7 @@ class InstallerTests(unittest.TestCase):
             root = Path(temporary)
             checkout = root / "checkout with spaces"
             checkout.mkdir()
-            for name in ("install.sh", "hunt-dashboard"):
+            for name in ("install.sh", "kiroshi"):
                 shutil.copy2(ROOT / name, checkout / name)
             shutil.copytree(ROOT / "dashboard", checkout / "dashboard", ignore=shutil.ignore_patterns("__pycache__"))
             commands = root / "commands"
@@ -75,7 +75,7 @@ class InstallerTests(unittest.TestCase):
             result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("0 / 8", result.stdout)
-            launcher = binary_dir / "hunt-dashboard"
+            launcher = binary_dir / "kiroshi"
             self.assertTrue(launcher.is_symlink())
             result = subprocess.run([str(launcher), "--help"], env=env, capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)

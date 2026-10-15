@@ -6,16 +6,17 @@ import sqlite3
 import sys
 
 from .tools import ROOT, discover
+from .config import default_data_dir, database_path
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Check local Hunt prerequisites and tool adapters")
+    parser = argparse.ArgumentParser(description="Check local Kiroshi prerequisites and tool adapters")
     parser.add_argument("--json", action="store_true", help="Print machine-local paths and compatibility as JSON")
-    parser.add_argument("--data-dir", default=str(ROOT / ".hunt-data"))
+    parser.add_argument("--data-dir", default=str(default_data_dir()))
     parser.add_argument("--require-tools", action="store_true", help="Exit nonzero unless every runnable adapter is installed and compatible")
     args = parser.parse_args()
     paths = {}
-    database = Path(args.data_dir).resolve() / "hunt.sqlite3"
+    database = database_path(Path(args.data_dir).resolve())
     if database.exists():
         try:
             with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as connection:
@@ -30,7 +31,7 @@ def main():
     if args.json:
         print(json.dumps(result, indent=2))
     else:
-        print(f"Hunt installation doctor — Python {result['python']}")
+        print(f"Kiroshi installation doctor — Python {result['python']}")
         print(f"{result['ready']} / 8 scan adapters ready; missing tools do not prevent dashboard startup.\n")
         for tool in tools:
             label = "READY" if tool["runnable"] else "INVENTORY" if tool["installed"] and not tool["adapter"] else "CHECK" if tool["installed"] else "MISSING"

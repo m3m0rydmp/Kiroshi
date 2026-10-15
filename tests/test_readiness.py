@@ -150,7 +150,7 @@ class PublicReferenceTests(unittest.TestCase):
         collector = Collector()
         public = {"id": 123, "attributes": {"title": "Public", "disclosed": True, "disclosed_at": "2020-01-01"}}
         private = {"id": 456, "attributes": {"title": "Private", "disclosed": False}}
-        with patch.dict("os.environ", {"HUNT_H1_API_USERNAME": "local-test", "HUNT_H1_API_TOKEN": "secret-test"}), patch("dashboard.references.read_json", return_value={"data": [public, private]}) as fetch:
+        with patch.dict("os.environ", {"KIROSHI_H1_API_USERNAME": "local-test", "KIROSHI_H1_API_TOKEN": "secret-test"}), patch("dashboard.references.read_json", return_value={"data": [public, private]}) as fetch:
             result = collector.discover("team:fixture")
             self.assertEqual(len(result["results"]), 1)
             self.assertNotIn("secret-test", json.dumps(result))

@@ -1,7 +1,7 @@
-id: hunt-server-header
+id: kiroshi-server-header
 info:
   name: HTTP server header inventory
-  author: hunt-dashboard
+  author: kiroshi
   severity: info
   description: Inventory only. A server header is not a confirmed vulnerability.
   tags: inventory

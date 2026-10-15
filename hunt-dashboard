@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Compatibility launcher for earlier installations.
 set -euo pipefail
-cd -- "$(dirname -- "$(readlink -f -- "$0")")"
-exec python3 -m dashboard.server "$@"
+KIROSHI_CHECKOUT="$(dirname -- "$(readlink -f -- "$0")")"
+exec "$KIROSHI_CHECKOUT/kiroshi" "$@"

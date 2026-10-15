@@ -1,8 +1,8 @@
-# Hunt — local bug bounty dashboard
+# Kiroshi — local bug bounty dashboard
 
 A browser-based engagement workspace that runs installed Linux/WSL tools, keeps
 recon and evidence locally, and prepares shared workspaces for Claude Code or Codex.
-The interface uses the Afterglow cyan/lavender/sunset theme.
+The interface uses a cyan/lavender/sunset theme.
 
 ## Install and start
 
@@ -11,15 +11,15 @@ clone/update. No npm build, pip packages, Docker, model key or paid service is n
 for the dashboard itself. Install scan tools separately as needed.
 
 ```bash
-git clone https://github.com/m3m0rydmp/hunt.git
-cd hunt
+git clone https://github.com/m3m0rydmp/Kiroshi.git
+cd Kiroshi
 bash install.sh
-./hunt-dashboard
+./kiroshi
 ```
 
 Open **http://localhost:8741**. Keep the terminal open; Ctrl+C stops the server.
 If this dashboard is published on a non-default branch, clone that branch instead:
-`git clone --branch dashboard-wsl https://github.com/m3m0rydmp/hunt.git`.
+`git clone --branch dashboard-wsl https://github.com/m3m0rydmp/Kiroshi.git`.
 Adjust the repository URL if the published fork is renamed.
 
 The installer creates a local launcher in `~/.local/bin` and checks tools. It does
@@ -74,7 +74,7 @@ or TLS fingerprint. A blocked run needs review; it is not proof of a vulnerabili
 
 ## Local data
 
-The server binds only to `127.0.0.1`. Runtime state defaults to `.hunt-data/`, ignored
+The server binds only to `127.0.0.1`. Runtime state defaults to `.kiroshi-data/`, ignored
 by Git. It includes credentials and sensitive evidence; keep it private and back it
 up while the server is stopped. Optional custom data directories should live outside
 the checkout. This is a single-user service without remote login or multi-user isolation.

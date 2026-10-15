@@ -1,4 +1,4 @@
-# Hunt dashboard — Afterglow
+# Kiroshi dashboard
 
 A local WSL engagement console built on [0xcucumbersalad/hunt](https://github.com/0xcucumbersalad/hunt).
 The original `hunt` CLI is retained. The dashboard invokes that actual script for
@@ -17,8 +17,8 @@ Requires Python 3.10+ and Bash. No Python packages, Node build, Docker, or model
 keys are required to run the dashboard itself.
 
 ```bash
-cd hunt  # your cloned checkout
-./hunt-dashboard
+cd Kiroshi  # your cloned checkout
+./kiroshi
 ```
 
 Open **http://localhost:8741** from your Windows browser. If WSL localhost forwarding
@@ -26,7 +26,7 @@ is disabled, enable that forwarding; do not expose this service on a public inte
 The process binds to IPv4 loopback only. Stop it with Ctrl+C.
 
 ```bash
-./hunt-dashboard --port 8742 --data-dir ~/.local/share/hunt-dashboard
+./kiroshi --port 8742 --data-dir ~/.local/share/kiroshi
 ```
 
 ## Engagement workflow
@@ -99,7 +99,7 @@ The dashboard does not currently configure Burp MCP or HTTP Workbench MCP.
 
 ## Sessions and local security
 
-Session values are stored in plaintext JSON files under `.hunt-data/secrets/` with
+Session values are stored in plaintext JSON files under `.kiroshi-data/secrets/` with
 mode 0600. They are not encrypted at rest; use disk encryption if required. The API
 returns labels, exact origins and header names, never saved values. No credentials
 are put in browser localStorage or persisted job command metadata. Private per-job
@@ -182,10 +182,10 @@ non-disclosed results. It needs separate HackerOne API credentials in the server
 environment (not engagement cookies):
 
 ```bash
-export HUNT_H1_API_USERNAME='your-api-username'
-read -rs HUNT_H1_API_TOKEN
-export HUNT_H1_API_TOKEN
-./hunt-dashboard
+export KIROSHI_H1_API_USERNAME='your-api-username'
+read -rs KIROSHI_H1_API_TOKEN
+export KIROSHI_H1_API_TOKEN
+./kiroshi
 ```
 
 Enter the token at the hidden shell prompt. Tokens are not stored in the dashboard
@@ -208,7 +208,7 @@ Reference methodology: [HackerOne report states](https://docs.hackerone.com/en/a
 
 httpx, Katana, Feroxbuster, ffuf, Nuclei, and the public-reference collector use a
 consistent Linux Chrome-style User-Agent. The Chrome major version is detected from
-the installed browser; without Chrome it falls back to major 154. Set `HUNT_USER_AGENT`
+the installed browser; without Chrome it falls back to major 154. Set `KIROSHI_USER_AGENT`
 before starting the server to select a different single-line browser User-Agent.
 Session-provided User-Agent headers are ignored so they cannot replace the configured
 identity. The selected identity is visible in Toolchain and command previews.
@@ -222,11 +222,11 @@ traffic; shared instructions request the configured identity for constructed HTT
 
 ## Storage and recovery
 
-All runtime state is under `.hunt-data/` by default (ignored by Git):
+All runtime state is under `.kiroshi-data/` by default (ignored by Git):
 
 ```text
-.hunt-data/
-  hunt.sqlite3             # engagements, job metadata, cached assets, triage
+.kiroshi-data/
+  kiroshi.sqlite3             # engagements, job metadata, cached assets, triage
   secrets/                 # private saved session values
   jobs/<job-id>/output.log # persistent capped evidence, one log per run
   engagements/<id>/        # agent-ready workspace and original scaffold brief

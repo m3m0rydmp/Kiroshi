@@ -22,6 +22,7 @@ from .readiness import FIELDS, NOTICE, content_hash, evaluate, normalize_review,
 from .references import Collector, report_id
 from .http_identity import browser_user_agent
 from .traffic import Feedback, effective, normalize as normalize_traffic, HTTP_TOOLS
+from .config import default_data_dir, database_path
 
 MAX_LOG = 10 * 1024 * 1024
 
@@ -46,7 +47,7 @@ class App:
         self.data = Path(data).resolve()
         self.data.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.lock = threading.RLock()
-        self.db = sqlite3.connect(self.data / "hunt.sqlite3", check_same_thread=False)
+        self.db = sqlite3.connect(database_path(self.data), check_same_thread=False)
         self.db.execute("CREATE TABLE IF NOT EXISTS records (kind TEXT, id TEXT, body TEXT, PRIMARY KEY(kind,id))")
         self.db.commit()
         self.token = secrets.token_urlsafe(32)
@@ -698,7 +699,7 @@ or fabricate trial balances, eligibility, outcomes or bounty amounts.
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "HuntLocal/0.1"
+    server_version = "KiroshiLocal/0.1"
 
     def log_message(self, fmt, *args):
         # No request bodies or target URLs in server console.
@@ -734,7 +735,8 @@ class Handler(BaseHTTPRequestHandler):
             raise PermissionError("Cross-origin requests are blocked")
         if self.headers.get("Sec-Fetch-Site") == "cross-site":
             raise PermissionError("Cross-site requests are blocked")
-        if mutation and not secrets.compare_digest(self.headers.get("X-Hunt-Token", ""), self.app.token):
+        supplied_token = self.headers.get("X-Kiroshi-Token") or self.headers.get("X-Hunt-Token", "")
+        if mutation and not secrets.compare_digest(supplied_token, self.app.token):
             raise PermissionError("Invalid request token; reload the dashboard")
 
     def do_GET(self):
@@ -755,7 +757,7 @@ class Handler(BaseHTTPRequestHandler):
                 job = self.app.get("job", parts[2])
                 file = self.app.logpath(job)
                 if parts[3] == "download":
-                    return self.respond(file.read_bytes() if file.exists() else b"", content_type="text/plain; charset=utf-8", attachment=f"hunt-{job['id']}.log")
+                    return self.respond(file.read_bytes() if file.exists() else b"", content_type="text/plain; charset=utf-8", attachment=f"kiroshi-{job['id']}.log")
                 if file.exists():
                     with file.open("rb") as stream:
                         stream.seek(max(0, file.stat().st_size - 100000))
@@ -836,15 +838,15 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Hunt local WSL dashboard")
+    parser = argparse.ArgumentParser(prog="kiroshi", description="Kiroshi local WSL dashboard")
     parser.add_argument("--port", type=int, default=8741)
-    parser.add_argument("--data-dir", default=str(ROOT / ".hunt-data"))
+    parser.add_argument("--data-dir", default=str(default_data_dir()))
     args = parser.parse_args()
     os.umask(0o077)
     app = App(args.data_dir)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     server.app = app
-    print(f"Hunt dashboard: http://127.0.0.1:{server.server_address[1]}", flush=True)
+    print(f"Kiroshi dashboard: http://127.0.0.1:{server.server_address[1]}", flush=True)
     print(f"Local data: {app.data}", flush=True)
     try:
         server.serve_forever()

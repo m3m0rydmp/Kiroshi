@@ -55,7 +55,7 @@ async function api(path, body) {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "X-Hunt-Token": state.token,
+            "X-Kiroshi-Token": state.token,
           },
           body: JSON.stringify(body),
         }
@@ -98,7 +98,7 @@ function overview() {
     running = state.jobs.filter(pending);
   return (
     heading(
-      "Your hunt starts here.",
+      "Your next finding starts here.",
       "A local command center for your bug bounty engagements.",
       newButton(),
     ) +
@@ -145,7 +145,7 @@ function overview() {
         .join(
           "",
         )}</div><button class="btn" data-view="tools">Manage toolchain ↗</button></div>`,
-    )}${panel("Working model", `<div class="panel-body"><div class="activity-item"><span class="activity-dot"></span><div><h3>01 / Set the boundary</h3><p>Explicit hosts and exclusions. Policy URL stays separate.</p></div></div><div class="activity-item"><span class="activity-dot"></span><div><h3>02 / Collect & cache</h3><p>Anonymous discovery, live job logs and retained evidence.</p></div></div><div class="activity-item"><span class="activity-dot"></span><div><h3>03 / Add context</h3><p>Scoped session headers, named identities and agent handoffs.</p></div></div></div>`)}</div></div><div class="page-bottom">HUNT / LOCAL WORKSPACE · Original scaffold by 0xcucumbersalad · Dashboard extension</div>`
+    )}${panel("Working model", `<div class="panel-body"><div class="activity-item"><span class="activity-dot"></span><div><h3>01 / Set the boundary</h3><p>Explicit hosts and exclusions. Policy URL stays separate.</p></div></div><div class="activity-item"><span class="activity-dot"></span><div><h3>02 / Collect & cache</h3><p>Anonymous discovery, live job logs and retained evidence.</p></div></div><div class="activity-item"><span class="activity-dot"></span><div><h3>03 / Add context</h3><p>Scoped session headers, named identities and agent handoffs.</p></div></div></div>`)}</div></div><div class="page-bottom">KIROSHI / LOCAL WORKSPACE · Original scaffold by 0xcucumbersalad · Dashboard extension</div>`
   );
 }
 function engagementTable(rows) {
@@ -178,7 +178,7 @@ function engagementView() {
       "Anonymous and authenticated work share the same persistent cache.",
       `<div class="row"><button class="btn" data-action="edit-engagement" data-id="${e.id}">Edit scope</button><button class="btn primary" data-action="run" data-id="${e.id}">＋ New run</button></div>`,
     ) +
-    `<div class="grid-two"><div>${panel("Scope & operating limits", `<div class="panel-body stack"><div><label>IN SCOPE</label><code>${e.scope.map(esc).join("<br>")}</code></div><div><label>EXCLUDED</label><code>${e.excluded.map(esc).join("<br>") || "None specified"}</code></div><div><label>PROGRAM POLICY</label><span class="path text-muted">${esc(e.policy) || "Not provided"}</span></div><div class="row"><span class="pill">${e.rate} requests / second</span><span class="pill">${e.duration} second job limit</span><span class="pill">${esc(e.provider)}</span></div></div>`)}${panel("Cached discoveries", assetTable(state.assets.filter((a) => a.engagement_id === e.id).slice(0, 10)), `<button class="btn small" data-view="assets">All assets →</button>`)}${panel("Run history", jobTable(state.jobs.filter((j) => j.engagement_id === e.id).slice(0, 8)))}</div><div>${panel("Session credentials", `<div class="panel-body"><div class="note neutral">Start anonymously. Add cookies or headers here whenever you need an authenticated pass.</div>${sessions.length ? sessions.map((s) => `<div class="session-card"><div class="row spread"><h3>${esc(s.label)}</h3><span class="pill ready">Saved</span></div><p class="path">${esc(s.origin)}</p><code>${s.header_names.map(esc).join(", ")} · values hidden</code><div class="row"><button class="btn small" data-action="replace-session" data-id="${s.id}">Replace</button><button class="btn small danger" data-action="delete-session" data-id="${s.id}">Delete</button></div></div>`).join("") : "<p>No sessions saved. Anonymous runs are ready.</p>"}<div class="form-actions"><button class="btn" data-action="session" data-id="${e.id}">＋ Add session</button></div></div>`)}${panel("Continue with an agent", `<div class="panel-body"><p>The hunt script generates a brief in this engagement workspace. Claude Code and Codex use shared instructions and handoff notes.</p><div class="form-actions"><button class="btn" data-view="agent">Open handoff ↗</button></div></div>`)}</div></div>`
+    `<div class="grid-two"><div>${panel("Scope & operating limits", `<div class="panel-body stack"><div><label>IN SCOPE</label><code>${e.scope.map(esc).join("<br>")}</code></div><div><label>EXCLUDED</label><code>${e.excluded.map(esc).join("<br>") || "None specified"}</code></div><div><label>PROGRAM POLICY</label><span class="path text-muted">${esc(e.policy) || "Not provided"}</span></div><div class="row"><span class="pill">${e.rate} requests / second</span><span class="pill">${e.duration} second job limit</span><span class="pill">${esc(e.provider)}</span></div></div>`)}${panel("Cached discoveries", assetTable(state.assets.filter((a) => a.engagement_id === e.id).slice(0, 10)), `<button class="btn small" data-view="assets">All assets →</button>`)}${panel("Run history", jobTable(state.jobs.filter((j) => j.engagement_id === e.id).slice(0, 8)))}</div><div>${panel("Session credentials", `<div class="panel-body"><div class="note neutral">Start anonymously. Add cookies or headers here whenever you need an authenticated pass.</div>${sessions.length ? sessions.map((s) => `<div class="session-card"><div class="row spread"><h3>${esc(s.label)}</h3><span class="pill ready">Saved</span></div><p class="path">${esc(s.origin)}</p><code>${s.header_names.map(esc).join(", ")} · values hidden</code><div class="row"><button class="btn small" data-action="replace-session" data-id="${s.id}">Replace</button><button class="btn small danger" data-action="delete-session" data-id="${s.id}">Delete</button></div></div>`).join("") : "<p>No sessions saved. Anonymous runs are ready.</p>"}<div class="form-actions"><button class="btn" data-action="session" data-id="${e.id}">＋ Add session</button></div></div>`)}${panel("Continue with an agent", `<div class="panel-body"><p>The scaffold script generates a brief in this engagement workspace. Claude Code and Codex use shared instructions and handoff notes.</p><div class="form-actions"><button class="btn" data-view="agent">Open handoff ↗</button></div></div>`)}</div></div>`
   );
 }
 function assetTable(rows) {
@@ -301,7 +301,7 @@ function discoverReferenceModal() {
   modal(
     "Search public HackerOne reports",
     "Uses the documented Hacktivity API; only explicitly disclosed results are shown.",
-    `<form id="reference-discover-form"><label>Lucene query (optional)</label><input name="query" placeholder="team:gitlab AND total_awarded_amount:>0"><label>Page (10 results)</label><input name="page" type="number" min="1" max="100" value="1"><div class="note neutral">${state.reference_search_enabled ? "HackerOne API credentials are configured in the server environment." : "Set HUNT_H1_API_USERNAME and HUNT_H1_API_TOKEN in your WSL environment, then restart the dashboard. Public URL imports work without API credentials."}</div><div class="inline-error" id="form-error"></div><div class="form-actions"><button class="btn primary" ${state.reference_search_enabled ? "" : "disabled"}>Search disclosed reports</button></div></form><div id="discovery-results"></div>`,
+    `<form id="reference-discover-form"><label>Lucene query (optional)</label><input name="query" placeholder="team:gitlab AND total_awarded_amount:>0"><label>Page (10 results)</label><input name="page" type="number" min="1" max="100" value="1"><div class="note neutral">${state.reference_search_enabled ? "HackerOne API credentials are configured in the server environment." : "Set KIROSHI_H1_API_USERNAME and KIROSHI_H1_API_TOKEN in your WSL environment, then restart the dashboard. Public URL imports work without API credentials."}</div><div class="inline-error" id="form-error"></div><div class="form-actions"><button class="btn primary" ${state.reference_search_enabled ? "" : "disabled"}>Search disclosed reports</button></div></form><div id="discovery-results"></div>`,
   );
 }
 function referenceDetail(id) {
@@ -348,7 +348,7 @@ function agentView() {
           "Workspace",
           empty(
             "Create an engagement first",
-            "Agent workspaces are generated from the hunt script.",
+            "Agent workspaces are generated from the scaffold script.",
           ),
         )
       : `<div class="toolbar">${engagementFilter()}</div><div class="note neutral">Agent execution stays in your terminal. This page prepares the workspace and launch command; it does not run an unattended AI agent. Your existing Claude Code provider configuration applies.</div><div class="grid-two"><div>${panel("Shared handoff", `<div class="panel-body"><label for="handoff-text">Current position, evidence references, pending cleanup and next action</label><textarea id="handoff-text" rows="15" placeholder="Loading…"></textarea><div class="form-actions"><button class="btn primary" data-action="save-handoff" data-id="${e.id}">Save handoff</button></div></div>`)}</div><div>${panel("Launch locally", `<div class="panel-body stack"><div><label>ENGAGEMENT</label><strong>${esc(e.name)}</strong></div><div><label>TERMINAL COMMAND</label><pre id="agent-command" class="terminal">Loading…</pre></div><button class="btn" data-action="copy-agent">Copy command</button><p class="help">Stop the current agent before launching another. Sessions saved in this dashboard are not automatically injected into an external agent process.</p><div><label>WORKSPACE</label><code id="agent-path" class="path"></code></div></div>`)}</div></div>`)
